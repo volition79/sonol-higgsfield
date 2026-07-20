@@ -55,7 +55,7 @@ def parser() -> argparse.ArgumentParser:
         cmd = sub.add_parser(name)
         cmd.add_argument("production")
 
-    cmd = sub.add_parser("migrate", help="upgrade a v1 production to the current schema")
+    cmd = sub.add_parser("migrate", help="upgrade a v1-v3 production to the current schema")
     cmd.add_argument("production")
 
     cmd = sub.add_parser("validate-grammar", help="validate one production shot grammar")
@@ -88,15 +88,8 @@ def parser() -> argparse.ArgumentParser:
     cmd.add_argument("production")
     cmd.add_argument("--actor", default="user")
 
-    cmd = sub.add_parser("set-cost-scenario")
+    cmd = sub.add_parser("approve-budget")
     cmd.add_argument("production")
-    cmd.add_argument("scenario", choices=("economy", "recommended", "highest_quality"))
-    cmd.add_argument("credits", type=float)
-    cmd.add_argument("--actor", default="agent")
-
-    cmd = sub.add_parser("approve-cost")
-    cmd.add_argument("production")
-    cmd.add_argument("scenario", choices=("economy", "recommended", "highest_quality"))
     cmd.add_argument("max_credits", type=float)
     cmd.add_argument("--actor", default="user")
 
@@ -136,6 +129,17 @@ def parser() -> argparse.ArgumentParser:
     cmd.add_argument("production")
     cmd.add_argument("shot_id")
     cmd.add_argument("patch", type=json_object)
+    cmd.add_argument("--actor", default="agent")
+
+    cmd = sub.add_parser("set-boundary")
+    cmd.add_argument("production")
+    cmd.add_argument("shot_id")
+    cmd.add_argument("strategy", choices=sorted(state.BOUNDARY_STRATEGIES))
+    cmd.add_argument("--reason", required=True)
+    cmd.add_argument("--previous-shot-id")
+    cmd.add_argument("--previous-frame")
+    cmd.add_argument("--planned-keyframe")
+    cmd.add_argument("--cut-type")
     cmd.add_argument("--actor", default="agent")
 
     cmd = sub.add_parser("transition-shot")
@@ -228,10 +232,8 @@ def execute(args: argparse.Namespace) -> Any:
         state.set_requirement(p, args.field, args.value, args.status, args.actor, args.source)
     elif args.command == "lock-requirements":
         state.lock_requirements(p, args.actor)
-    elif args.command == "set-cost-scenario":
-        state.set_cost_scenario(p, args.scenario, args.credits, args.actor)
-    elif args.command == "approve-cost":
-        state.approve_cost(p, args.scenario, args.max_credits, args.actor)
+    elif args.command == "approve-budget":
+        state.approve_budget(p, args.max_credits, args.actor)
     elif args.command == "add-asset":
         state.add_asset(p, args.asset_id, args.asset_type, args.label)
     elif args.command == "update-asset":
@@ -244,6 +246,18 @@ def execute(args: argparse.Namespace) -> Any:
         state.add_shot(p, args.shot_id, args.scene_id, args.title, args.order)
     elif args.command == "update-shot":
         state.update_shot(p, args.shot_id, args.patch, args.actor)
+    elif args.command == "set-boundary":
+        state.set_boundary(
+            p,
+            args.shot_id,
+            args.strategy,
+            args.actor,
+            reason=args.reason,
+            previous_shot_id=args.previous_shot_id,
+            previous_frame=args.previous_frame,
+            planned_keyframe=args.planned_keyframe,
+            cut_type=args.cut_type,
+        )
     elif args.command == "transition-shot":
         state.transition_shot_approval(p, args.shot_id, args.target, args.actor, args.reason)
     elif args.command == "transition-generation":

@@ -3,9 +3,8 @@
 ## Authority order
 
 1. Current authenticated CLI `model get` / `workflow get` output.
-2. Current CLI cost response for the exact arguments.
-3. Current official Higgsfield skill routing guidance.
-4. This reference, which is a capability map and may drift.
+2. Current official Higgsfield skill routing guidance.
+3. This reference, which is a capability map and may drift.
 
 Never send a paid request solely from remembered flags or examples here.
 
@@ -66,7 +65,7 @@ The official streamable HTTP endpoint is expected at
 `https://mcp.higgsfield.ai/mcp`. A root URL without `/mcp` is invalid for the
 current endpoint. Treat MCP as usable only after an authenticated handshake and
 visible tool input schemas. MCP availability never expands the product's model
-contract, bypasses billing, or replaces explicit cost approval.
+contract, bypasses billing, or replaces explicit project-ceiling approval.
 
 If MCP is unavailable or its schema cannot be inspected in the current session,
 use the CLI and record `MCP_UNAVAILABLE`. Never claim that MCP has a feature

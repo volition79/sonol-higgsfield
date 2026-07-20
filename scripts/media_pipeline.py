@@ -61,6 +61,62 @@ def atempo_chain(factor: float) -> str:
     return ",".join(f"atempo={value:.8f}" for value in values)
 
 
+def final_mix_command(
+    ffmpeg: str,
+    video: Path,
+    output: Path,
+    *,
+    dialogue: Path | None = None,
+    ambience: Path | None = None,
+    effects: list[Path] | None = None,
+    music: Path | None = None,
+) -> list[str]:
+    """Build a deterministic external-stem mix that never keeps source video audio."""
+    stems: list[tuple[Path, float]] = []
+    if dialogue:
+        stems.append((dialogue, 1.0))
+    if ambience:
+        stems.append((ambience, 0.35))
+    stems.extend((item, 0.8) for item in (effects or []))
+    if music:
+        stems.append((music, 0.22 if dialogue else 0.5))
+    if not stems:
+        raise MediaError("final-mix requires at least one external audio stem")
+    command = [ffmpeg, "-y", "-i", str(video)]
+    for path, _ in stems:
+        command.extend(("-i", str(path)))
+    labels: list[str] = []
+    filters: list[str] = []
+    for index, (_, volume) in enumerate(stems, start=1):
+        label = f"s{index}"
+        filters.append(f"[{index}:a:0]aresample=48000,volume={volume:.3f}[{label}]")
+        labels.append(f"[{label}]")
+    filters.append(
+        "".join(labels)
+        + f"amix=inputs={len(labels)}:duration=longest:dropout_transition=0,"
+        + "loudnorm=I=-16:LRA=11:TP=-1.5[mix]"
+    )
+    command.extend(
+        (
+            "-filter_complex",
+            ";".join(filters),
+            "-map",
+            "0:v:0",
+            "-map",
+            "[mix]",
+            "-c:v",
+            "copy",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "256k",
+            "-shortest",
+            str(output),
+        )
+    )
+    return command
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dry-run", action="store_true")
@@ -96,6 +152,18 @@ def main() -> int:
     cmd.add_argument("video", type=Path)
     cmd.add_argument("audio", type=Path)
     cmd.add_argument("output", type=Path)
+
+    cmd = sub.add_parser("strip-audio")
+    cmd.add_argument("input", type=Path)
+    cmd.add_argument("output", type=Path)
+
+    cmd = sub.add_parser("final-mix")
+    cmd.add_argument("video", type=Path)
+    cmd.add_argument("output", type=Path)
+    cmd.add_argument("--dialogue", type=Path)
+    cmd.add_argument("--ambience", type=Path)
+    cmd.add_argument("--effect", action="append", default=[], type=Path)
+    cmd.add_argument("--music", type=Path)
     args = parser.parse_args()
 
     try:
@@ -157,11 +225,35 @@ def main() -> int:
                  "-map", "[v]", "-map", "[a]", "-c:v", "libx264", "-crf", "16", "-c:a", "aac", str(target)],
                 args.dry_run,
             )
-        else:
+        elif args.command == "mux":
             video, audio, target = checked_input(args.video), checked_input(args.audio), output_path(args.output)
             result = run(
                 [ffmpeg, "-y", "-i", str(video), "-i", str(audio), "-map", "0:v:0", "-map", "1:a:0",
                  "-c:v", "copy", "-c:a", "aac", "-b:a", "192k", "-shortest", str(target)],
+                args.dry_run,
+            )
+        elif args.command == "strip-audio":
+            source, target = checked_input(args.input), output_path(args.output)
+            result = run(
+                [ffmpeg, "-y", "-i", str(source), "-map", "0:v:0", "-c:v", "copy", "-an", str(target)],
+                args.dry_run,
+            )
+        else:
+            video, target = checked_input(args.video), output_path(args.output)
+            dialogue = checked_input(args.dialogue) if args.dialogue else None
+            ambience = checked_input(args.ambience) if args.ambience else None
+            effects = [checked_input(item) for item in args.effect]
+            music = checked_input(args.music) if args.music else None
+            result = run(
+                final_mix_command(
+                    ffmpeg,
+                    video,
+                    target,
+                    dialogue=dialogue,
+                    ambience=ambience,
+                    effects=effects,
+                    music=music,
+                ),
                 args.dry_run,
             )
     except (MediaError, json.JSONDecodeError) as exc:

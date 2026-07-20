@@ -7,13 +7,13 @@ orchestration supplied by this skill.
 |---|---|---|---|---|
 | Account, workspace, credits | Native CLI | Preflight guidance | Possible; inspect schema | Redacted preflight and budget gate |
 | Model/workflow discovery | Native live schema | Routing recommendations | Only if tools visible | Snapshot, drift detection, contract selection |
-| Exact generation cost | Native `generate cost` | Requires quote | Unknown until schema visible | Three explicit scenarios and ceiling approval |
+| Exact generation cost | Native `generate cost`, intentionally unused | Provider guidance may recommend quotes | Unknown until schema visible | No live quote; recent-actual arithmetic plus project ceiling |
 | Image generation/reference inputs | Native models | Model routing | Likely, not assumed | Versioned asset plan, OCR and user lock |
 | Video generation/start/end/multi-reference | Native models including current Seedance contracts | Seedance routing | Likely, not assumed | Per-shot board, reference packing, job ledger |
 | Provider job wait/get/list | Native CLI | Execution guidance | Unknown until schema visible | Resume protocol and deterministic job IDs |
 | Native generated audio | Model-dependent | Routing guidance | Model-dependent | Shot-level audio classification |
-| Voice change | Live workflow exists | Route when requested | Unknown until schema visible | Conditional routing, cost and manual QC gates |
-| TTS/audio/music | Native current audio models | Model routing | Unknown until schema visible | Narration/pronunciation plan and local mix |
+| Voice change | Live workflow exists | Route when requested | Unknown until schema visible | Not used as cleanup or stem separation |
+| TTS/audio/music | Native current audio models | Model routing | Unknown until schema visible | ElevenLabs V3 dialogue master, narration plan, external final mix |
 | Speech transcript | Current data models | Optional QC route | Unknown until schema visible | Evidence ledger; not treated as pronunciation proof |
 | Requirements interview | Not a backend function | Partial conversational guidance | No evidence | Four-state interview, explicit user lock |
 | Script/timecode/shot decomposition | Not a provider contract | Partial workflow guidance | No evidence | Required durable scene/shot state |
@@ -22,12 +22,12 @@ orchestration supplied by this skill.
 | Provider-specific camera compilation | Cinema 3.5 has structured style/light/grade; other models accept prompts/references | Model-specific guidance | Only after live schema | Native/reference/prompt/web/post support classifier and live-schema validation |
 | Camera-technique compliance scoring | No deterministic guarantee | Manual inspection | No proven score | Conflict checks before generation and explicit cinematography QC after generation |
 | Asset and shot approvals | Not a provider contract | Conversational gates only | No evidence | Versioned state machines and user-only authority |
-| Cross-shot continuity | References help generation | Prompt/reference advice | No automatic score confirmed | Eight-field plan, boundary extraction, manual review |
+| Cross-shot continuity | References help generation | Prompt/reference advice | No automatic score confirmed | Four director boundary strategies, selective previous-frame inheritance, extraction and review |
 | Korean on-screen text check | Image model may render text | Model recommendation | No automatic checker confirmed | Tesseract `kor+eng` text-presence gate plus review |
 | Korean pronunciation | TTS/transcript tools help | Audio routing advice | No automatic score confirmed | Pronunciation sheet, audition, transcript and manual listen |
 | Objective lip-sync scoring | No observed scoring contract | Manual review required | No evidence | `MANUAL_REQUIRED`/pass/fail gate; no invented score |
 | Dialogue stem separation | No observed dedicated contract | No proven automation | No evidence | Explicit unsupported boundary; integrate another tool if authorized |
-| FFmpeg finishing | Not provider-side generation | May recommend local FFmpeg | No | Probe, frames, audio extract, trim, concat, stretch, mux |
+| FFmpeg finishing | Not provider-side generation | May recommend local FFmpeg | No | Probe, frames, strip audio, external-stem final mix, trim, concat, stretch, mux |
 | Selective regeneration | CLI can resubmit jobs | Workflow recommendation | Tool-dependent | Version/reset/retry state and repair ladder |
 | Local production dashboard | No | No | No | Bootstrap/Vanilla industrial dashboard, split JSON, history |
 
@@ -38,14 +38,14 @@ orchestration supplied by this skill.
 - Durable split JSON production state with atomic writes and backup.
 - Four-state requirements interview and explicit user lock.
 - Versioned asset and shot approval machines.
-- Paid-generation interlocks and actual-credit ceiling enforcement.
-- Scene, shot, eight-field continuity, reference, audio, QC, and job ledgers.
+- Paid-generation interlocks, project ceiling preflight, and reconciliation.
+- Scene, shot, eight-field continuity, boundary, reference, audio, QC, and job ledgers.
 - Versioned `shot_grammar` state with approval invalidation and generation gate.
 - Source-linked 148-technique catalog, 13 genre and 7 platform profiles.
 - Deterministic recommender, provider compiler, conflict validator, live enum,
   freshness, and contract-fingerprint checks.
-- Three-scenario live cost estimator with local-media upload warning.
-- Guarded paid shot runner with live balance, quote/execution fingerprint,
+- Recent matching actual-credit arithmetic with explicit `REFERENCE_ONLY` status.
+- Guarded paid shot runner with live balance, execution fingerprint,
   re-fetched provider contract, prompt/native-param, ceiling, upload, strict
   job-ID, and actual-cost reconciliation checks.
 - Redacted live CLI/model/workflow/account/MCP preflight.
@@ -71,7 +71,7 @@ orchestration supplied by this skill.
 - Soul training is optional, consent-sensitive, account/plan-dependent, and not
   a prerequisite when approved reference images are sufficient.
 - Paid smoke generation is not part of installation testing; it requires the
-  user's quoted-credit approval.
+  user's project-ceiling approval and unpriced-job risk acknowledgement.
 
 ## Feasibility conclusion
 

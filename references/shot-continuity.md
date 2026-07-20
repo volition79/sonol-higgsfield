@@ -14,7 +14,29 @@ Every shot must resolve these before board approval:
 8. `next_scene_setup`: the end state deliberately handed to the next shot.
 
 Also record duration, purpose, model, reference package, required locked assets,
-audio route, prompt, cost arguments, version, and intended edit points.
+audio route, prompt, version, intended edit points, and the incoming boundary
+decision.
+
+## Director boundary decision
+
+Choose one strategy before compiling every shot. Store its reason, previous
+shot ID, frame paths, and transport roles in the approved shot board.
+
+| Strategy | Use when | Previous last frame | Planned keyframe |
+|---|---|---|---|
+| `continuous_match` | Scene, axis, action, and visual flow continue | Required as `start_image` | Optional `image_references`; middle timing is not guaranteed |
+| `motivated_transition` | A camera move or visual bridge changes composition | Required as `start_image` | Required as `end_image`, preferably in a bridge shot |
+| `editorial_cut` | Reverse angle, reaction, insert, hard cut, or decisive shot-size change | Forbidden | Current `start_image` when available |
+| `scene_reset` | Place, time, style, or story unit changes | Forbidden | Current `start_image` when available |
+
+Extract the accepted previous clip's final frame, never a rejected candidate's
+frame. Do not propagate a frame before visual QC because identity, hand, prop,
+or background defects would become the next generation's initial condition.
+
+The current Seedance CLI has no native `middle_image`. A planned image sent via
+`image_references` is semantic guidance only. When arrival at that composition
+matters, use it as a bridge shot's `end_image`, approve the bridge, and start the
+following shot from that keyframe.
 
 ## Structured shot grammar
 
@@ -36,6 +58,8 @@ and depth effect as well.
 
 - Start frame controls entry composition and state.
 - End frame controls handoff composition and state.
+- A previous final frame becomes a start frame only for `continuous_match` or
+  `motivated_transition`.
 - Character asset controls face, hair, body, costume, and stable details.
 - Location asset controls geometry, weather, lighting, and persistent objects.
 - Prop/product asset controls exact shape, label, color, orientation, and wear.

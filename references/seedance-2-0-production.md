@@ -15,13 +15,13 @@ Official sources:
 Use `controlled_single_shot` unless the user explicitly accepts an experimental
 multi-shot generation. Start image-to-video with a sharp, front-facing,
 well-lit image when possible. Prototype at 720p, eight seconds or less, and
-`generate_audio=false`. Review the entire clip, especially seconds five through
+`generate_audio=false` through `audio_mode=post_only`. Review the entire clip, especially seconds five through
 eight. Change one variable per iteration.
 
 Do not describe a 720p-to-1080p regeneration as an upscale that preserves
 motion. The live Seedance CLI contract exposes no seed parameter, so a new
 resolution generation can change motion and composition. When an approved
-motion must remain intact, quote and inspect the live `video_upscale` or
+motion must remain intact, inspect the live `video_upscale` or
 `topaz_video` contract instead.
 
 ## Prompt compiler order
@@ -91,15 +91,17 @@ model, not a remembered prose count.
 
 Choose exactly one `audio_mode`:
 
-- `none`: native audio off;
-- `native_sfx`: native audio on for planned effects/ambience;
-- `native_dialogue`: native audio on for planned visible dialogue;
-- `audio_reference`: native audio on and at least one audio plus visual
-  reference required;
-- `post_only`: native audio off; construct audio during finishing.
+- `post_only`: default; generate picture without audio and construct all
+  non-dialogue, narration, ambience, effects, and music during finishing;
+- `none`: only for an intentionally silent final shot;
+- `audio_reference`: only for visible dialogue after the final ElevenLabs
+  `eleven_v3` master is locked; at least one audio and one visual reference are
+  required. Discard the Seedance-rendered track and remux the untouched master;
+- `native_sfx` and `native_dialogue`: compiler-compatible but outside the Sonol
+  production policy.
 
-The live contract currently defaults `generate_audio` to true. Every cost and
-execution command must therefore include the compiler's explicit boolean. Do
+The live contract currently defaults `generate_audio` to true. Every execution
+command must therefore include the compiler's explicit boolean. Do
 not let a prototype inherit the provider default.
 
 ## Iteration and QC
@@ -120,8 +122,8 @@ prompt does not prove the next generation will reproduce it exactly.
 ## Paid execution binding
 
 Compile against a schema snapshot no older than 24 hours. Store the selected
-contract hash in `shot_grammar.provider_binding.schema_contract_hash`. Quote
-the exact execution arguments, store their canonical fingerprint, and bind the
-user's approval to that fingerprint. Immediately before a paid call, re-fetch
+contract hash in `shot_grammar.provider_binding.schema_contract_hash` and store
+the execution argument fingerprint for drift detection. Do not call the live
+cost endpoint. Immediately before a paid call, re-fetch
 the selected live model/workflow contract and reject contract, prompt, native
 parameter, or argument drift.

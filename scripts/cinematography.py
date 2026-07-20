@@ -218,7 +218,7 @@ def default_seedance_plan() -> dict[str, Any]:
         "resolution": "720p",
         "generation_mode": "std",
         "bitrate_mode": "standard",
-        "audio_mode": "none",
+        "audio_mode": "post_only",
         "prototype": True,
         "timed_beats": [],
         "camera_invariants": [],

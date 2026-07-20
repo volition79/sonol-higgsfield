@@ -2,8 +2,6 @@ from __future__ import annotations
 
 import importlib.util
 import json
-import os
-import stat
 import sys
 import tempfile
 import unittest
@@ -34,9 +32,6 @@ class HelperTests(unittest.TestCase):
                 "model", f"--image_references={json.dumps([str(media)])}", "--video-references", "[]"
             ])
             self.assertEqual(found, [str(media.resolve())])
-        self.assertEqual(estimate_costs.parse_credits({"credits": 2.5}), 2.5)
-        with self.assertRaises(state.StateError):
-            estimate_costs.parse_credits({"price": "unknown"})
 
     def test_atempo_chain_handles_extreme_factors(self) -> None:
         self.assertEqual(media_pipeline.atempo_chain(1.0), "atempo=1.00000000")
@@ -45,40 +40,49 @@ class HelperTests(unittest.TestCase):
         with self.assertRaises(media_pipeline.MediaError):
             media_pipeline.atempo_chain(0)
 
-    def test_explicit_three_scenario_quotes_with_fake_cli(self) -> None:
+    def test_reference_cost_arithmetic_uses_matching_actual_profiles(self) -> None:
         with tempfile.TemporaryDirectory() as folder:
             base = Path(folder)
             production = base / "production"
             state.initialize(production, "Cost", SKILL / "assets" / "dashboard-template")
             state.add_scene(production, "SCENE_001", "One", 1)
             state.add_shot(production, "SHOT_001", "SCENE_001", "One", 1)
-            options = {
-                "economy": ["fake_model", "--quality", "economy"],
-                "recommended": ["fake_model", "--quality", "recommended"],
-                "highest_quality": ["fake_model", "--quality", "highest_quality"],
-            }
+            argv = [
+                "seedance_2_0", "--duration", "5", "--resolution", "720p",
+                "--generate-audio", "false",
+            ]
             state.update_shot(
                 production,
                 "SHOT_001",
                 {
-                    "cost_options": options,
-                    "execution": {"mode": "model", "argv": options["recommended"]},
+                    "duration_seconds": 5,
+                    "execution": {"mode": "model", "argv": argv},
                 },
                 "agent",
             )
-            fake = base / "fake-higgsfield"
-            fake.write_text(
-                "#!/usr/bin/env python3\nimport json,sys\n"
-                "quality=sys.argv[-1]\n"
-                "print(json.dumps({'credits': {'economy':1,'recommended':2,'highest_quality':4}[quality]}))\n",
-                encoding="utf-8",
+            profile = estimate_costs.execution_profile("model", argv)
+            state.record_actual_cost(
+                production, "HISTORICAL_001", 10, "agent", "job-history-1", execution_profile=profile
             )
-            fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
-            totals = estimate_costs.estimate(production, str(fake), False)
-            self.assertEqual(totals, {"economy": 1.0, "recommended": 2.0, "highest_quality": 4.0})
+            result = estimate_costs.calculate(production, attempts=2)
+            self.assertEqual(result["total_estimated_credits"], 20.0)
+            self.assertEqual(result["covered_shots"], 1)
             costs = state.read_json(state.data_dir(production) / "costs.json")
-            self.assertEqual(len(costs["task_estimates"]), 3)
-            self.assertTrue(all(item["execution_fingerprint"].startswith("sha256:") for item in costs["task_estimates"]))
+            self.assertEqual(costs["reference_estimates"]["method"], "recent_actual_arithmetic")
+            self.assertNotIn("scenarios", costs)
+
+    def test_final_mix_drops_source_audio_and_uses_external_stems(self) -> None:
+        command = media_pipeline.final_mix_command(
+            "ffmpeg",
+            Path("picture.mp4"),
+            Path("final.mp4"),
+            dialogue=Path("dialogue.wav"),
+            music=Path("music.wav"),
+        )
+        self.assertEqual(command.count("-i"), 3)
+        self.assertIn("0:v:0", command)
+        self.assertIn("[mix]", command)
+        self.assertNotIn("0:a:0", " ".join(command))
 
     def test_schema_snapshot_fingerprints_contracts(self) -> None:
         contract = {"job_type": "seedance_2_0", "params": []}
