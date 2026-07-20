@@ -1,0 +1,127 @@
+# Seedance 2.0 production contract
+
+Read this file whenever a shot uses `seedance_2_0` or
+`seedance_2_0_mini`. The current authenticated CLI contract remains the final
+authority. The official tutorial and prompting guide inform the workflow, but
+marketing language is not a deterministic compliance guarantee.
+
+Official sources:
+
+- <https://higgsfield.ai/blog/generating-with-seedance-2-0>
+- <https://higgsfield.ai/blog/seedance-prompting-guide>
+
+## Safe default
+
+Use `controlled_single_shot` unless the user explicitly accepts an experimental
+multi-shot generation. Start image-to-video with a sharp, front-facing,
+well-lit image when possible. Prototype at 720p, eight seconds or less, and
+`generate_audio=false`. Review the entire clip, especially seconds five through
+eight. Change one variable per iteration.
+
+Do not describe a 720p-to-1080p regeneration as an upscale that preserves
+motion. The live Seedance CLI contract exposes no seed parameter, so a new
+resolution generation can change motion and composition. When an approved
+motion must remain intact, quote and inspect the live `video_upscale` or
+`topaz_video` contract instead.
+
+## Prompt compiler order
+
+The compiler emits:
+
+1. shot count, total duration, aspect ratio, and shot mode;
+2. subject and one primary action;
+3. setting and lighting;
+4. one primary camera movement plus framing/focus;
+5. mood and style;
+6. numbered timecoded beats only for approved experimental multi-shot;
+7. end state, camera invariants, and audio route.
+
+Use precise camera verbs such as `dolly in`, `truck left`, `arc shot`,
+`push in`, `pull back wide`, `handheld follow`, `crane up`, or `orbital move`.
+Treat their execution as prompt-soft and verify the rendered clip. Functional
+constraints such as `no cuts`, `no zoom`, and `natural head movement` are
+allowed because they define the camera plan. Avoid generic negative-prompt
+lists.
+
+`controlled_single_shot` rejects cuts, montage language, multiple timed beats,
+or a shot count other than one. `seedance_multishot_experimental` requires:
+
+- explicit user approval in `experimental_approved`;
+- two or more shots;
+- exactly one `{time, action}` beat per shot;
+- acceptance that one failed internal beat normally requires regenerating the
+  full provider clip.
+
+## Reference manifest
+
+Keep semantic intent separate from the CLI transport:
+
+```json
+{
+  "semantic_role": "character",
+  "transport_field": "image_references",
+  "source": "media/images/CHAR_001_v3.png",
+  "controls": ["identity", "hair", "wardrobe"],
+  "locked_asset_id": "CHAR_001",
+  "prompt_alias": null
+}
+```
+
+Allowed transport fields are `start_image`, `end_image`,
+`image_references`, `video_references`, and `audio_references`. The Higgsfield
+web guide describes semantic `@character`, `@style`, `@motion`, and `@audio`
+references, but the current CLI schema exposes only transport arrays. Keep
+`prompt_alias` null and never invent `@` aliases for a CLI command.
+
+Apply the live limits fail-closed:
+
+- images plus start/end: at most 9;
+- videos: at most 3;
+- audios: at most 3;
+- all references including start/end: at most 12;
+- audio references require at least one image, video, start image, or end
+  image;
+- fast mode permits only 480p or 720p.
+
+The official pages contain shorthand that can sound contradictory about
+reference totals. Follow the current CLI CEL rules captured for the exact
+model, not a remembered prose count.
+
+## Audio routing
+
+Choose exactly one `audio_mode`:
+
+- `none`: native audio off;
+- `native_sfx`: native audio on for planned effects/ambience;
+- `native_dialogue`: native audio on for planned visible dialogue;
+- `audio_reference`: native audio on and at least one audio plus visual
+  reference required;
+- `post_only`: native audio off; construct audio during finishing.
+
+The live contract currently defaults `generate_audio` to true. Every cost and
+execution command must therefore include the compiler's explicit boolean. Do
+not let a prototype inherit the provider default.
+
+## Iteration and QC
+
+Compare the output against the exact shot contract rather than asking whether
+it looks generally cinematic:
+
+- primary action and final state;
+- camera movement, framing, axis, and prohibited cuts/zoom;
+- identity, wardrobe, product, location, and reference roles;
+- motion stability through the full duration;
+- dialogue/SFX timing and lip sync when applicable;
+- continuity handoff to adjacent shots.
+
+Record the one changed variable and preserve the prior candidate. A successful
+prompt does not prove the next generation will reproduce it exactly.
+
+## Paid execution binding
+
+Compile against a schema snapshot no older than 24 hours. Store the selected
+contract hash in `shot_grammar.provider_binding.schema_contract_hash`. Quote
+the exact execution arguments, store their canonical fingerprint, and bind the
+user's approval to that fingerprint. Immediately before a paid call, re-fetch
+the selected live model/workflow contract and reject contract, prompt, native
+parameter, or argument drift.

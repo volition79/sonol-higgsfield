@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "last_verified": "2026-07-20",
+  "support_levels": {
+    "native_structured": "CLI/MCP 라이브 스키마의 구조화 필드로 전달 가능",
+    "native_reference": "이미지·영상 레퍼런스로 직접 유도 가능",
+    "prompt_soft": "프롬프트에 번역하지만 결과 보장은 없음",
+    "web_only": "Higgsfield 웹 UI에서만 확인된 제어",
+    "post_only": "생성 후 편집 단계에서 구현",
+    "unreliable": "실험적이며 A/B 저비용 검증 필요",
+    "unsupported": "현재 실행 계약으로 직접 전달 불가"
+  },
+  "providers": {
+    "cinematic_studio_video_3_5": {
+      "kind": "workflow", "default_support": "prompt_soft", "schema_required": true, "native_semantics": "camera_style is a broad style family, not the 64 web motion presets",
+      "native_mappings": {
+        "camera_style": {"movement.static": "classic_static", "movement.one_take": "one_take", "vfx.impossible_camera": "impossible_camera"},
+        "light_scheme": {"lighting.soft": "soft_cross", "lighting.backlight": "contre_jour", "lighting.top": "overhead_fall", "lighting.window": "window", "lighting.practicals": "practicals", "lighting.silhouette": "silhouette"},
+        "color_grading": {"color.naturalistic": "naturalistic_clean", "color.teal_orange": "teal_orange_epic", "color.cold_steel": "cold_steel", "color.hyper_neon": "hyper_neon", "color.bleach_bypass": "bleach_bypass", "color.black_white": "classic_bw"}
+      },
+      "technique_support": {"movement.static": "native_structured", "movement.one_take": "native_structured", "vfx.impossible_camera": "native_structured", "lighting.soft": "native_structured", "lighting.backlight": "native_structured", "lighting.top": "native_structured", "lighting.window": "native_structured", "lighting.practicals": "native_structured", "lighting.silhouette": "native_structured", "color.naturalistic": "native_structured", "color.teal_orange": "native_structured", "color.cold_steel": "native_structured", "color.hyper_neon": "native_structured", "color.bleach_bypass": "native_structured", "color.black_white": "native_structured"}
+    },
+    "cinematic_studio_3_0": {"kind": "workflow", "default_support": "prompt_soft", "schema_required": true, "native_mappings": {"speedramp": {"temporal.realtime": "linear", "temporal.slow_motion": "slowmo", "temporal.speed_ramp": "impact"}}, "technique_support": {"temporal.realtime": "native_structured", "temporal.slow_motion": "native_structured", "temporal.speed_ramp": "native_structured"}},
+    "seedance_2_0": {"kind": "model", "default_support": "prompt_soft", "schema_required": true, "native_mappings": {}, "technique_support": {"movement.fpv": "native_reference", "movement.one_take": "unreliable", "movement.bullet_time": "unreliable", "vfx.impossible_camera": "unreliable"}},
+    "seedance_2_0_mini": {"kind": "model", "default_support": "prompt_soft", "schema_required": true, "native_mappings": {}, "technique_support": {"movement.fpv": "native_reference", "movement.one_take": "unreliable", "movement.bullet_time": "unreliable", "vfx.impossible_camera": "unreliable"}},
+    "wan2_6": {"kind": "model", "default_support": "prompt_soft", "schema_required": true, "native_mappings": {}, "technique_support": {"movement.fpv": "native_reference", "movement.through_object": "native_reference"}},
+    "wan2_7": {"kind": "model", "default_support": "prompt_soft", "schema_required": true, "native_mappings": {}, "technique_support": {"movement.fpv": "native_reference", "movement.through_object": "native_reference"}},
+    "veo3_1": {"kind": "model", "default_support": "prompt_soft", "schema_required": true, "native_mappings": {}, "technique_support": {}},
+    "kling3_0": {"kind": "model", "default_support": "prompt_soft", "schema_required": true, "native_mappings": {}, "technique_support": {}},
+    "cinematic_studio_image": {"kind": "workflow", "default_support": "prompt_soft", "schema_required": true, "automation_blocker": "camera_model_id, camera_lens_id, camera_focal_length_id, camera_aperture_id의 라이브 선택지 조회가 필요", "native_mappings": {}, "technique_support": {}},
+    "higgsfield_web_camera_controls": {
+      "kind": "web_ui", "default_support": "web_only", "schema_required": false, "native_mappings": {}, "technique_support": {},
+      "official_control_count": 65,
+      "named_motion_count_excluding_general": 64,
+      "official_controls": ["General","Eyes In","Bullet Time","Aerial Pullback","Arc Left","BTS","Buckle Up","Car Chasing","Car Grip","Crane Down","Crane Over The Head","Crane Up","Crash Zoom In","Crash Zoom Out","Dolly In","Dolly Left","Dolly Out","Dolly Right","Dolly Zoom In","Dolly Zoom Out","Double Dolly","Dutch Angle","Eating Zoom","Fisheye","Flying Cam Transition","Focus Change","FPV Drone","Glam","Handheld","Head Tracking","Hero Cam","Hyperlapse","Incline","Jib down","Jib up","Lazy Susan","Low Shutter","Mouth In","Object POV","Overhead","Pan Left","Pan Right","Rapid Zoom In","Rapid Zoom Out","Road Rush","Robo Arm","Snorricam","Static","Super Dolly In","Super Dolly Out","Through Object In","Through Object Out","Tilt Down","Tilt up","Timelapse Glam","Timelapse Human","Timelapse Landscape","Whip Pan","Wiggle","YoYo Zoom","360 Orbit","Zoom In","Zoom Out","Arc Right","3D Rotation"]
+    },
+    "mcp_higgsfield": {"kind": "mcp", "default_support": "unsupported", "schema_required": true, "verification_blocker": "현재 세션 tools/list로 카메라 입력 스키마를 다시 확인해야 함", "native_mappings": {}, "technique_support": {}}
+  }
+}

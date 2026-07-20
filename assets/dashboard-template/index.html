@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>SONOL / HIGGSFIELD CONTROL DECK</title>
+  <link rel="icon" href="data:,">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans+KR:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="dashboard.css">
+</head>
+<body>
+  <header class="top-rail">
+    <div class="brand-plate"><span class="brand-mark">S/H</span><div><b>SONOL HIGGSFIELD</b><small>PRODUCTION CONTROL DECK</small></div></div>
+    <div class="system-state"><span class="led led-live"></span><span id="sync-state">LOCAL STATE</span><span id="generated-at">—</span></div>
+  </header>
+  <main>
+    <section class="hero-panel panel">
+      <div><p class="eyebrow">PRODUCTION / <span id="project-id">PROJECT_001</span></p><h1 id="project-name">Untitled production</h1><p id="project-meta" class="muted">요구사항을 준비하는 중입니다.</p></div>
+      <div class="gauge"><div class="gauge-value" id="progress-value">0%</div><div class="gauge-track"><span id="progress-bar"></span></div><small>FINAL COMPLETION</small></div>
+    </section>
+
+    <section class="metric-grid" id="metric-grid"></section>
+
+    <section class="deck-grid">
+      <article class="panel span-7"><div class="panel-head"><h2>승인 콘솔</h2><span class="tag tag-warn" id="approval-count">0 PENDING</span></div><div id="approval-queue" class="stack"></div></article>
+      <article class="panel span-5"><div class="panel-head"><h2>인터록 / 차단 사유</h2><span class="led led-warn"></span></div><div id="blockers" class="stack"></div></article>
+      <article class="panel span-12"><div class="panel-head"><h2>샷 파이프라인</h2><span class="tag">LIVE LEDGER</span></div><div class="table-wrap"><table><thead><tr><th>SHOT</th><th>BOARD</th><th>GRAMMAR</th><th>GENERATION</th><th>MODEL</th><th>QC</th><th>VERSION</th></tr></thead><tbody id="shots-table"></tbody></table></div></article>
+      <article class="panel span-12"><div class="panel-head"><h2>시네마토그래피 문법</h2><span class="tag">INTENT → CAMERA → PROVIDER</span></div><div id="grammar-grid" class="grammar-grid"></div></article>
+      <article class="panel span-7"><div class="panel-head"><h2>자산 잠금 현황</h2><span class="tag" id="asset-count">0 ASSETS</span></div><div id="assets-grid" class="asset-grid"></div></article>
+      <article class="panel span-5"><div class="panel-head"><h2>크레딧 예산</h2><span class="tag tag-money">CREDITS</span></div><div id="cost-panel"></div></article>
+      <article class="panel span-12"><div class="panel-head"><h2>변경 이력</h2><span class="tag">APPEND ONLY</span></div><div id="history" class="history"></div></article>
+    </section>
+  </main>
+  <div id="toast" role="status" aria-live="polite"></div>
+  <script src="project-data.js"></script>
+  <script src="dashboard.js"></script>
+</body>
+</html>

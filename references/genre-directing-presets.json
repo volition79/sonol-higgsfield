@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "profiles": {
+    "general": {"label_ko": "일반", "prefer": ["shot.ms", "angle.eye_level", "lens.normal", "movement.static", "composition.rule_of_thirds", "lighting.motivated", "editing.straight_cut"], "avoid": ["angle.dutch", "movement.dolly_zoom", "vfx.impossible_camera"]},
+    "drama": {"label_ko": "드라마", "prefer": ["shot.cu", "angle.eye_level", "lens.short_telephoto", "focus.shallow", "movement.dolly_in", "lighting.side", "editing.reaction", "editing.l_cut"], "avoid": ["movement.crash_zoom", "color.hyper_neon"]},
+    "romance": {"label_ko": "로맨스", "prefer": ["shot.mcu", "angle.three_quarter", "lens.short_telephoto", "focus.shallow", "movement.slider", "lighting.soft", "lighting.golden_hour", "editing.dissolve"], "avoid": ["lighting.hard", "temporal.short_shutter"]},
+    "thriller": {"label_ko": "스릴러", "prefer": ["shot.cu", "angle.dutch", "lens.wide", "movement.dolly_in", "composition.negative_space", "lighting.low_key", "editing.crosscut"], "avoid": ["lighting.high_key", "color.naturalistic"]},
+    "horror": {"label_ko": "공포", "prefer": ["shot.pov", "angle.worm_eye", "lens.ultra_wide", "movement.handheld", "composition.dirty_foreground", "lighting.silhouette", "audio.offscreen_cue"], "avoid": ["lighting.high_key", "movement.slider"]},
+    "action": {"label_ko": "액션", "prefer": ["shot.full", "angle.low", "lens.wide", "movement.tracking", "composition.action_room", "temporal.short_shutter", "editing.cut_on_action", "audio.impact_sync"], "avoid": ["focus.shallow", "editing.dissolve"]},
+    "comedy": {"label_ko": "코미디", "prefer": ["shot.two", "angle.eye_level", "lens.wide", "movement.static", "lighting.high_key", "editing.reaction", "editing.smash_cut"], "avoid": ["lighting.low_key", "color.bleach_bypass"]},
+    "documentary": {"label_ko": "다큐멘터리", "prefer": ["shot.ms", "angle.eye_level", "lens.normal", "movement.handheld", "lighting.motivated", "audio.ambience_bridge", "editing.j_cut"], "avoid": ["vfx.impossible_camera", "movement.bullet_time"]},
+    "interview": {"label_ko": "인터뷰", "prefer": ["shot.mcu", "angle.three_quarter", "lens.short_telephoto", "movement.static", "composition.look_room", "lighting.three_point", "audio.perspective"], "avoid": ["angle.dutch", "movement.orbit"]},
+    "product_ad": {"label_ko": "제품 광고", "prefer": ["shot.insert", "lens.macro", "focus.rack", "movement.slider", "composition.centered", "lighting.side", "color.naturalistic"], "avoid": ["movement.handheld", "temporal.low_shutter"]},
+    "food": {"label_ko": "푸드", "prefer": ["shot.insert", "angle.overhead", "lens.macro", "focus.selective", "movement.slider", "lighting.soft", "color.naturalistic"], "avoid": ["color.cold_steel", "movement.fpv"]},
+    "fashion_music": {"label_ko": "패션·뮤직", "prefer": ["shot.full", "angle.low", "lens.anamorphic", "movement.orbit", "lighting.volumetric", "color.hyper_neon", "editing.match_cut"], "avoid": ["lighting.three_point", "movement.static"]},
+    "sports": {"label_ko": "스포츠", "prefer": ["shot.full", "angle.low", "lens.telephoto", "movement.tracking", "composition.action_room", "temporal.slow_motion", "editing.cut_on_action"], "avoid": ["focus.shallow", "editing.fade"]}
+  },
+  "platform_profiles": {
+    "general": {"prefer": [], "avoid": []},
+    "cinema": {"prefer": ["lens.anamorphic", "composition.depth_layers", "audio.ambience_bridge", "editing.l_cut"], "avoid": ["social.caption_space", "social.loop_ending"]},
+    "youtube": {"prefer": ["shot.ms", "editing.cutaway", "audio.perspective"], "avoid": []},
+    "tiktok": {"prefer": ["social.first_second_hook", "social.caption_space", "social.loop_ending", "composition.vertical_safe"], "avoid": ["shot.ews", "editing.fade"]},
+    "reels": {"prefer": ["social.first_second_hook", "social.caption_space", "composition.vertical_safe", "editing.match_cut"], "avoid": ["shot.ews"]},
+    "shorts": {"prefer": ["social.first_second_hook", "social.sound_off", "composition.vertical_safe", "editing.jump_cut"], "avoid": ["editing.dissolve"]},
+    "web": {"prefer": ["shot.ms", "composition.rule_of_thirds", "social.sound_off"], "avoid": []}
+  }
+}
