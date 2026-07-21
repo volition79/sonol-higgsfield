@@ -124,7 +124,7 @@ essential image reference is allowed only after a recorded failure and a
 one-variable A/B test; an end image is reserved for simple motivated transitions
 where exact arrival matters. FFmpeg persists eight candidates from the final
 0.5 seconds and recommends the least blurred, while the director may select a
-better narrative frame with a recorded reason. Schema v7 requires start-image
+better narrative frame with a recorded reason. Schema v8 requires start-image
 preflight for aspect, collage/labels, subject readability, first-action
 compatibility, and off-frame reveal risk. Optional SSIM/PSNR comparison is
 technical evidence, not automatic approval. First-frame QC, boundary analysis,
@@ -137,6 +137,13 @@ exact-arrival transition and does not guarantee pixel-identical arrival.
 A local production directory and dashboard preserve requirements, versions,
 approvals, jobs, costs, QC state, and history. A later session can resume from
 the recorded state instead of reconstructing the project from chat memory.
+Paid submission is separated from queue waiting: the skill saves a durable
+attempt first, binds the job ID immediately, and observes the same job later.
+An interrupted create becomes an explicit ambiguous attempt instead of a blind
+retry; an interrupted wait keeps the known job ID. Provider completion and
+actual cost are always recorded even if local policies changed afterward.
+Missing credits remain reconcilable evidence, while above-ceiling actual usage
+is preserved and flagged rather than rejected from the ledger.
 
 ### Repair only what failed
 

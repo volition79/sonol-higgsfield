@@ -17,7 +17,7 @@ import cinematography
 import execution_contract
 
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 REQUIRED_REQUIREMENTS = (
     "purpose",
     "core_message",
@@ -72,8 +72,13 @@ SHOT_APPROVAL_TRANSITIONS = {
 GENERATION_STATES = {
     "PLANNED",
     "READY",
+    "SUBMITTING",
+    "SUBMISSION_AMBIGUOUS",
+    "SUBMITTED",
     "QUEUED",
-    "GENERATING",
+    "RUNNING",
+    "REMOTE_UNKNOWN",
+    "PROVIDER_COMPLETED",
     "GENERATED",
     "FAILED",
     "QC_FAILED",
@@ -81,11 +86,16 @@ GENERATION_STATES = {
 }
 GENERATION_TRANSITIONS = {
     "PLANNED": {"READY", "FAILED"},
-    "READY": {"QUEUED", "FAILED"},
-    "QUEUED": {"GENERATING", "FAILED"},
-    "GENERATING": {"GENERATED", "FAILED"},
+    "READY": {"SUBMITTING", "FAILED"},
+    "SUBMITTING": {"SUBMITTED", "SUBMISSION_AMBIGUOUS", "FAILED"},
+    "SUBMISSION_AMBIGUOUS": {"SUBMITTED", "FAILED"},
+    "SUBMITTED": {"QUEUED", "RUNNING", "REMOTE_UNKNOWN", "PROVIDER_COMPLETED", "FAILED"},
+    "QUEUED": {"SUBMITTED", "RUNNING", "REMOTE_UNKNOWN", "PROVIDER_COMPLETED", "FAILED"},
+    "RUNNING": {"SUBMITTED", "QUEUED", "REMOTE_UNKNOWN", "PROVIDER_COMPLETED", "FAILED"},
+    "REMOTE_UNKNOWN": {"SUBMITTED", "QUEUED", "RUNNING", "PROVIDER_COMPLETED", "FAILED"},
+    "PROVIDER_COMPLETED": {"GENERATED"},
     "GENERATED": {"QC_FAILED", "FINAL_COMPLETE", "READY"},
-    "FAILED": {"READY"},
+    "FAILED": {"READY", "SUBMITTED", "QUEUED", "RUNNING", "REMOTE_UNKNOWN", "PROVIDER_COMPLETED"},
     "QC_FAILED": {"READY", "FINAL_COMPLETE"},
     "FINAL_COMPLETE": set(),
 }
@@ -310,6 +320,13 @@ def default_start_image_review() -> dict[str, Any]:
     }
 
 
+def default_generation_attempts() -> dict[str, Any]:
+    return {
+        "active_attempt_id": None,
+        "attempts": [],
+    }
+
+
 def initialize(root: str | Path, name: str, template_dir: Path) -> Path:
     production = _root(root)
     if production.exists() and any(production.iterdir()):
@@ -374,7 +391,13 @@ def initialize(root: str | Path, name: str, template_dir: Path) -> Path:
             "covered_shots": 0,
             "total_shots": 0,
         },
-        "actual": {"credits": 0.0, "transactions": [], "reconciliation_required": False, "pending": []},
+        "actual": {
+            "credits": 0.0,
+            "transactions": [],
+            "reconciliation_required": False,
+            "pending": [],
+            "ceiling_breach": False,
+        },
         "cash_value": {"status": "UNKNOWN", "value": None, "currency": None},
     }
     history = _base_document() | {"events": []}
@@ -401,7 +424,7 @@ def migrate(root: str | Path) -> dict[str, Any]:
     if versions == {SCHEMA_VERSION}:
         return {"migrated": False, "schema_version": SCHEMA_VERSION}
     only_version = next(iter(versions)) if len(versions) == 1 else None
-    if only_version not in {1, 2, 3, 4, 5, 6}:
+    if only_version not in {1, 2, 3, 4, 5, 6, 7}:
         raise StateError(f"cannot migrate mixed or unsupported schema versions: {sorted(versions, key=str)}")
     assert isinstance(only_version, int)
     from_version = only_version
@@ -474,6 +497,48 @@ def migrate(root: str | Path) -> dict[str, Any]:
         generation.pop("cost_options", None)
         execution = generation.setdefault("execution", {"mode": None, "argv": []})
         execution.setdefault("fingerprint", None)
+        generation.setdefault("active_attempt_id", None)
+        attempts = generation.setdefault("attempts", [])
+        legacy_status = generation.get("status")
+        legacy_job_id = generation.get("job_id")
+        if not attempts and (legacy_job_id or legacy_status in {"QUEUED", "GENERATING"}):
+            attempt_id = "ATTEMPT_MIGRATED_001"
+            remote_status = "COMPLETED" if legacy_status in {"GENERATED", "QC_FAILED", "FINAL_COMPLETE"} else "UNKNOWN"
+            resolution = "RECORDED" if remote_status == "COMPLETED" else "PENDING"
+            attempts.append(
+                {
+                    "attempt_id": attempt_id,
+                    "generation_version": generation.get("version", 1),
+                    "execution_fingerprint": execution.get("fingerprint"),
+                    "provider": generation.get("model"),
+                    "mode": execution.get("mode"),
+                    "match_signature": None,
+                    "started_at": shot.get("updated_at") or utc_now(),
+                    "submitted_at": shot.get("updated_at") if legacy_job_id else None,
+                    "last_checked_at": None,
+                    "resolved_at": shot.get("updated_at") if resolution == "RECORDED" else None,
+                    "job_id": legacy_job_id,
+                    "remote_status": remote_status,
+                    "raw_remote_status": None,
+                    "resolution": resolution,
+                    "ambiguity_reason": "migrated legacy in-flight state" if resolution == "PENDING" else None,
+                    "account_credits_before": None,
+                    "account_credits_after": None,
+                    "cost_uncertainty_acknowledged": False,
+                    "result_available": legacy_status in {"GENERATED", "QC_FAILED", "FINAL_COMPLETE"},
+                }
+            )
+            if resolution == "PENDING":
+                generation["active_attempt_id"] = attempt_id
+        for attempt in attempts:
+            if isinstance(attempt, dict):
+                attempt.setdefault("cost_uncertainty_acknowledged", False)
+        if legacy_status == "GENERATING":
+            generation["status"] = "SUBMITTED" if legacy_job_id else "SUBMISSION_AMBIGUOUS"
+        elif legacy_status == "QUEUED" and not legacy_job_id:
+            generation["status"] = "SUBMISSION_AMBIGUOUS"
+        elif legacy_job_id and generation.get("active_attempt_id"):
+            generation["status"] = "SUBMITTED"
         shot.setdefault("qc", {})["cinematography"] = "PENDING"
     approval = state["project"].setdefault("cost_approval", {})
     approval.pop("scenario", None)
@@ -498,6 +563,11 @@ def migrate(root: str | Path) -> dict[str, Any]:
     actual = costs.setdefault("actual", {"credits": 0.0, "transactions": []})
     actual.setdefault("reconciliation_required", False)
     actual.setdefault("pending", [])
+    ceiling = approval.get("max_credits")
+    actual.setdefault(
+        "ceiling_breach",
+        ceiling is not None and float(actual.get("credits", 0) or 0) > float(ceiling),
+    )
     for name, document in state.items():
         document["schema_version"] = SCHEMA_VERSION
         document["updated_at"] = utc_now()
@@ -633,6 +703,10 @@ def approve_budget(root: str | Path, max_credits: float, actor: str) -> None:
     )
     project["updated_at"] = utc_now()
     atomic_write_json(project_path, project)
+    costs_actual = costs.setdefault("actual", {})
+    costs_actual["ceiling_breach"] = actual > max_credits
+    costs["updated_at"] = utc_now()
+    atomic_write_json(data_dir(root) / "costs.json", costs)
     append_history(
         root,
         "project_credit_ceiling_approved",
@@ -796,6 +870,7 @@ def add_shot(root: str | Path, shot_id: str, scene_id: str, title: str, order: i
             "retry_count": 0,
             "execution": {"mode": None, "argv": [], "fingerprint": None},
             "result_path": None,
+            **default_generation_attempts(),
         },
         "audio": default_audio_plan(),
         "qc": {
@@ -846,6 +921,19 @@ def update_shot(root: str | Path, shot_id: str, patch: dict[str, Any], actor: st
     path = data_dir(root) / "shots.json"
     shots = read_json(path)
     shot = _find(shots.get("items", []), shot_id, "shot")
+    submission_sensitive = set(patch) - {"title", "purpose"}
+    if submission_sensitive and unresolved_submission(shot):
+        raise StateError(
+            "cannot change submitted generation inputs while a provider attempt is unresolved; reconcile or resolve it first"
+        )
+    if not submission_sensitive and unresolved_submission(shot):
+        shot.update(deepcopy(patch))
+        shot["updated_at"] = utc_now()
+        shots["updated_at"] = utc_now()
+        atomic_write_json(path, shots)
+        append_history(root, "shot_metadata_updated", actor, "shot", shot_id, {"fields": sorted(patch)})
+        sync_dashboard(root)
+        return
     normalized = deepcopy(patch)
     if "model" in normalized:
         shot["generation"]["model"] = normalized.pop("model")
@@ -891,7 +979,9 @@ def update_shot(root: str | Path, shot_id: str, patch: dict[str, Any], actor: st
         shot["approval_status"] = "DRAFT"
         shot.update({"approved_by": None, "approved_at": None})
         shot["generation"]["version"] = int(shot["generation"].get("version", 1)) + 1
-    shot["generation"].update({"status": "PLANNED", "job_id": None, "result_path": None})
+    shot["generation"].update(
+        {"status": "PLANNED", "active_attempt_id": None, "job_id": None, "result_path": None}
+    )
     shot["qc"] = {key: "PENDING" for key in shot["qc"]}
     shot["final_included"] = False
     shot["updated_at"] = utc_now()
@@ -1320,6 +1410,141 @@ def store_reference_estimates(root: str | Path, estimates: dict[str, Any], actor
     sync_dashboard(root)
 
 
+def _active_attempt(shot: dict[str, Any]) -> dict[str, Any] | None:
+    attempt_id = (shot.get("generation") or {}).get("active_attempt_id")
+    if not attempt_id:
+        return None
+    return next(
+        (
+            item
+            for item in (shot.get("generation") or {}).get("attempts", [])
+            if item.get("attempt_id") == attempt_id
+        ),
+        None,
+    )
+
+
+def unresolved_submission(shot: dict[str, Any]) -> bool:
+    attempt = _active_attempt(shot)
+    return bool(attempt and attempt.get("resolution") == "PENDING")
+
+
+def active_submission_attempt(root: str | Path, shot_id: str) -> dict[str, Any] | None:
+    shots = read_json(data_dir(root) / "shots.json")
+    shot = _find(shots.get("items", []), shot_id, "shot")
+    attempt = _active_attempt(shot)
+    return deepcopy(attempt) if attempt is not None else None
+
+
+def start_submission_attempt(
+    root: str | Path,
+    shot_id: str,
+    actor: str,
+    *,
+    provider: str,
+    mode: str,
+    execution_fingerprint: str,
+    match_signature: dict[str, Any],
+    account_credits_before: float | None,
+    cost_uncertainty_acknowledged: bool = False,
+) -> str:
+    state = load_all(root)
+    shot = _find(state["shots"].get("items", []), shot_id, "shot")
+    if shot.get("generation", {}).get("status") != "READY":
+        raise StateError("shot generation status must be READY")
+    gates = shot_gate_errors(state, shot)
+    if gates:
+        raise StateError("generation gate failed: " + "; ".join(gates))
+    if unresolved_submission(shot):
+        raise StateError("an unresolved provider submission must be reconciled before a new attempt")
+    generation = shot["generation"]
+    attempts = generation.setdefault("attempts", [])
+    attempt_id = f"ATTEMPT_{len(attempts) + 1:03d}"
+    attempt = {
+        "attempt_id": attempt_id,
+        "generation_version": generation.get("version", 1),
+        "execution_fingerprint": execution_fingerprint,
+        "provider": provider,
+        "mode": mode,
+        "match_signature": deepcopy(match_signature),
+        "started_at": utc_now(),
+        "submitted_at": None,
+        "last_checked_at": None,
+        "resolved_at": None,
+        "job_id": None,
+        "remote_status": "UNKNOWN",
+        "raw_remote_status": None,
+        "resolution": "PENDING",
+        "ambiguity_reason": None,
+        "account_credits_before": account_credits_before,
+        "account_credits_after": None,
+        "cost_uncertainty_acknowledged": bool(cost_uncertainty_acknowledged),
+        "result_available": False,
+    }
+    attempts.append(attempt)
+    generation.update(
+        {
+            "status": "SUBMITTING",
+            "active_attempt_id": attempt_id,
+            "job_id": None,
+            "result_path": None,
+        }
+    )
+    shot["updated_at"] = utc_now()
+    state["shots"]["updated_at"] = utc_now()
+    atomic_write_json(data_dir(root) / "shots.json", state["shots"])
+    append_history(
+        root,
+        "submission_attempt_started",
+        actor,
+        "shot",
+        shot_id,
+        {
+            "attempt_id": attempt_id,
+            "provider": provider,
+            "execution_fingerprint": execution_fingerprint,
+            "cost_uncertainty_acknowledged": bool(cost_uncertainty_acknowledged),
+        },
+    )
+    sync_dashboard(root)
+    return attempt_id
+
+
+def mark_submission_ambiguous(
+    root: str | Path,
+    shot_id: str,
+    actor: str,
+    reason: str,
+) -> None:
+    path = data_dir(root) / "shots.json"
+    shots = read_json(path)
+    shot = _find(shots.get("items", []), shot_id, "shot")
+    attempt = _active_attempt(shot)
+    if attempt is None:
+        raise StateError("shot has no active submission attempt")
+    attempt.update(
+        {
+            "remote_status": "UNKNOWN",
+            "last_checked_at": utc_now(),
+            "ambiguity_reason": reason,
+            "resolution": "PENDING",
+        }
+    )
+    shot["generation"]["status"] = "SUBMISSION_AMBIGUOUS"
+    shot["updated_at"] = utc_now()
+    shots["updated_at"] = utc_now()
+    atomic_write_json(path, shots)
+    append_history(
+        root,
+        "submission_became_ambiguous",
+        actor,
+        "shot",
+        shot_id,
+        {"attempt_id": attempt.get("attempt_id"), "reason": reason},
+    )
+    sync_dashboard(root)
+
+
 def record_job(
     root: str | Path,
     shot_id: str,
@@ -1327,14 +1552,211 @@ def record_job(
     result_path: str | None,
     actor: str,
 ) -> None:
+    if not isinstance(job_id, str) or not job_id.strip():
+        raise StateError("job_id must be a non-empty string")
     path = data_dir(root) / "shots.json"
     shots = read_json(path)
     shot = _find(shots.get("items", []), shot_id, "shot")
-    shot["generation"].update({"job_id": job_id, "result_path": result_path})
+    for other in shots.get("items", []):
+        if other.get("id") == shot_id:
+            continue
+        other_generation = other.get("generation") or {}
+        other_job_ids = {other_generation.get("job_id")} | {
+            item.get("job_id")
+            for item in other_generation.get("attempts", [])
+            if isinstance(item, dict)
+        }
+        if job_id in other_job_ids:
+            raise StateError(f"provider job id is already bound to shot {other.get('id')}")
+    generation = shot["generation"]
+    existing = generation.get("job_id")
+    if existing and existing != job_id:
+        raise StateError(f"shot is already bound to a different provider job id: {existing}")
+    attempt = _active_attempt(shot)
+    if attempt is None:
+        attempts = generation.setdefault("attempts", [])
+        attempt_id = f"ATTEMPT_{len(attempts) + 1:03d}"
+        attempt = {
+            "attempt_id": attempt_id,
+            "generation_version": generation.get("version", 1),
+            "execution_fingerprint": (generation.get("execution") or {}).get("fingerprint"),
+            "provider": generation.get("model"),
+            "mode": (generation.get("execution") or {}).get("mode"),
+            "match_signature": None,
+            "started_at": utc_now(),
+            "submitted_at": utc_now(),
+            "last_checked_at": None,
+            "resolved_at": None,
+            "job_id": job_id,
+            "remote_status": "SUBMITTED",
+            "raw_remote_status": None,
+            "resolution": "PENDING",
+            "ambiguity_reason": None,
+            "account_credits_before": None,
+            "account_credits_after": None,
+            "cost_uncertainty_acknowledged": False,
+            "result_available": False,
+        }
+        attempts.append(attempt)
+        generation["active_attempt_id"] = attempt_id
+    elif attempt.get("job_id") not in {None, job_id}:
+        raise StateError("active attempt is already bound to a different provider job id")
+    attempt.update(
+        {
+            "job_id": job_id,
+            "submitted_at": attempt.get("submitted_at") or utc_now(),
+            "remote_status": "SUBMITTED" if attempt.get("remote_status") == "UNKNOWN" else attempt.get("remote_status"),
+            "ambiguity_reason": None,
+        }
+    )
+    generation.update({"job_id": job_id, "result_path": result_path})
+    if generation.get("status") in {"SUBMITTING", "SUBMISSION_AMBIGUOUS", "FAILED", "READY"}:
+        generation["status"] = "SUBMITTED"
     shot["updated_at"] = utc_now()
     shots["updated_at"] = utc_now()
     atomic_write_json(path, shots)
-    append_history(root, "job_recorded", actor, "shot", shot_id, {"job_id": job_id})
+    append_history(
+        root,
+        "job_recorded",
+        actor,
+        "shot",
+        shot_id,
+        {"job_id": job_id, "attempt_id": attempt.get("attempt_id")},
+    )
+    sync_dashboard(root)
+
+
+def record_provider_observation(
+    root: str | Path,
+    shot_id: str,
+    normalized_status: str,
+    actor: str,
+    *,
+    raw_status: str | None,
+    result_available: bool,
+    account_credits_after: float | None = None,
+) -> None:
+    allowed = {"SUBMITTED", "QUEUED", "RUNNING", "REMOTE_UNKNOWN", "PROVIDER_COMPLETED", "FAILED"}
+    if normalized_status not in allowed:
+        raise StateError(f"invalid provider observation status: {normalized_status}")
+    path = data_dir(root) / "shots.json"
+    shots = read_json(path)
+    shot = _find(shots.get("items", []), shot_id, "shot")
+    attempt = _active_attempt(shot)
+    if attempt is None or not attempt.get("job_id"):
+        raise StateError("provider observation requires an active attempt with a job id")
+    now = utc_now()
+    attempt.update(
+        {
+            "remote_status": normalized_status.removeprefix("PROVIDER_"),
+            "raw_remote_status": raw_status,
+            "last_checked_at": now,
+            "account_credits_after": account_credits_after,
+            "result_available": bool(result_available),
+        }
+    )
+    generation = shot["generation"]
+    if normalized_status == "FAILED":
+        attempt.update({"resolution": "REMOTE_FAILED", "resolved_at": now})
+        generation["active_attempt_id"] = None
+        generation["status"] = "FAILED"
+        generation["retry_count"] = int(generation.get("retry_count", 0)) + 1
+    elif generation.get("status") not in {"GENERATED", "FINAL_COMPLETE"}:
+        generation["status"] = normalized_status
+    shot["updated_at"] = now
+    shots["updated_at"] = now
+    atomic_write_json(path, shots)
+    append_history(
+        root,
+        "provider_observation_recorded",
+        actor,
+        "shot",
+        shot_id,
+        {
+            "attempt_id": attempt.get("attempt_id"),
+            "job_id": attempt.get("job_id"),
+            "status": normalized_status,
+            "raw_status": raw_status,
+            "result_available": bool(result_available),
+        },
+    )
+    sync_dashboard(root)
+
+
+def finalize_provider_completion(root: str | Path, shot_id: str, actor: str) -> None:
+    path = data_dir(root) / "shots.json"
+    shots = read_json(path)
+    shot = _find(shots.get("items", []), shot_id, "shot")
+    attempt = _active_attempt(shot)
+    if attempt is None or attempt.get("remote_status") != "COMPLETED" or not attempt.get("job_id"):
+        raise StateError("provider completion evidence is required before local generation completion")
+    now = utc_now()
+    attempt.update({"resolution": "RECORDED", "resolved_at": now})
+    shot["generation"].update(
+        {
+            "status": "GENERATED",
+            "active_attempt_id": None,
+            "job_id": attempt.get("job_id"),
+        }
+    )
+    shot["updated_at"] = now
+    shots["updated_at"] = now
+    atomic_write_json(path, shots)
+    append_history(
+        root,
+        "provider_completion_finalized",
+        actor,
+        "shot",
+        shot_id,
+        {"attempt_id": attempt.get("attempt_id"), "job_id": attempt.get("job_id")},
+    )
+    sync_dashboard(root)
+
+
+def resolve_submission_ambiguity(
+    root: str | Path,
+    shot_id: str,
+    resolution: str,
+    actor: str,
+    reason: str,
+) -> None:
+    if resolution not in {"NOT_SUBMITTED", "ABANDONED_RISK_ACCEPTED"}:
+        raise StateError("ambiguity resolution must be NOT_SUBMITTED or ABANDONED_RISK_ACCEPTED")
+    if resolution == "ABANDONED_RISK_ACCEPTED" and actor != "user":
+        raise StateError("only the user may accept the duplicate-submission risk")
+    if not reason.strip():
+        raise StateError("ambiguity resolution requires a reason")
+    path = data_dir(root) / "shots.json"
+    shots = read_json(path)
+    shot = _find(shots.get("items", []), shot_id, "shot")
+    attempt = _active_attempt(shot)
+    if attempt is None or attempt.get("resolution") != "PENDING":
+        raise StateError("shot has no unresolved submission attempt")
+    if attempt.get("job_id"):
+        raise StateError("a known provider job must be reconciled, not abandoned as unknown")
+    now = utc_now()
+    attempt.update(
+        {
+            "resolution": resolution,
+            "resolved_at": now,
+            "ambiguity_reason": reason,
+        }
+    )
+    generation = shot["generation"]
+    generation["active_attempt_id"] = None
+    generation["status"] = "FAILED"
+    generation["retry_count"] = int(generation.get("retry_count", 0)) + 1
+    shot["updated_at"] = now
+    shots["updated_at"] = now
+    atomic_write_json(path, shots)
+    append_history(
+        root,
+        "submission_ambiguity_resolved",
+        actor,
+        "shot",
+        shot_id,
+        {"attempt_id": attempt.get("attempt_id"), "resolution": resolution, "reason": reason},
+    )
     sync_dashboard(root)
 
 
@@ -1359,13 +1781,25 @@ def record_actual_cost(
     }
     actual = costs.setdefault("actual", {})
     transactions = actual.setdefault("transactions", [])
-    projected = round(sum(float(item.get("credits", 0)) for item in transactions) + float(credits), 6)
+    existing = next(
+        (item for item in transactions if job_id and item.get("job_id") == job_id),
+        None,
+    )
+    if existing is not None and (
+        existing.get("entity_id") != entity_id or float(existing.get("credits", 0)) != float(credits)
+    ):
+        raise StateError("provider job already has a conflicting actual-cost transaction")
+    projected = round(
+        sum(float(item.get("credits", 0)) for item in transactions)
+        + (0.0 if existing is not None else float(credits)),
+        6,
+    )
     project = read_json(data_dir(root) / "project.json")
     ceiling = project.get("cost_approval", {}).get("max_credits")
-    if ceiling is not None and projected > float(ceiling):
-        raise StateError("recorded cost would exceed the approved ceiling")
-    transactions.append(transaction)
+    if existing is None:
+        transactions.append(transaction)
     actual["credits"] = projected
+    actual["ceiling_breach"] = ceiling is not None and projected > float(ceiling)
     pending = actual.setdefault("pending", [])
     actual["pending"] = [
         item
@@ -1378,7 +1812,8 @@ def record_actual_cost(
     actual["reconciliation_required"] = bool(actual["pending"])
     costs["updated_at"] = utc_now()
     atomic_write_json(costs_path, costs)
-    append_history(root, "actual_cost_recorded", actor, "cost", entity_id, transaction)
+    if existing is None:
+        append_history(root, "actual_cost_recorded", actor, "cost", entity_id, transaction)
     sync_dashboard(root)
 
 
@@ -1571,7 +2006,7 @@ def start_image_review_errors(shot: dict[str, Any]) -> list[str]:
     if status == "NOT_APPLICABLE" and generation_status in {"GENERATED", "FINAL_COMPLETE"}:
         return []
     if status != "PASSED":
-        return ["start image has not passed the v7 preparation review"]
+        return ["start image has not passed the required preparation review"]
     if review.get("start_image_path") != (shot.get("references") or {}).get("start"):
         return ["start image preparation review does not match the current references.start"]
     assessment = review.get("assessment") or {}
@@ -1789,12 +2224,25 @@ def transition_generation(root: str | Path, shot_id: str, target: str, actor: st
     state = load_all(root)
     shot = _find(state["shots"].get("items", []), shot_id, "shot")
     current = shot["generation"]["status"]
+    if target == "READY" and unresolved_submission(shot):
+        raise StateError("unresolved provider submission must be reconciled before retry")
     if target not in GENERATION_TRANSITIONS[current]:
         raise StateError(f"invalid generation transition: {current} -> {target}")
-    if target in {"QUEUED", "GENERATING", "GENERATED"}:
+    if target == "SUBMITTING":
         gates = shot_gate_errors(state, shot)
         if gates:
             raise StateError("generation gate failed: " + "; ".join(gates))
+        raise StateError("SUBMITTING may only be entered by the guarded paid runner")
+    if target == "FAILED" and unresolved_submission(shot):
+        raise StateError("an unresolved provider attempt must be reconciled or explicitly resolved, not marked failed")
+    if target in {"SUBMITTED", "QUEUED", "RUNNING", "REMOTE_UNKNOWN", "PROVIDER_COMPLETED"}:
+        raise StateError(f"{target} may only be recorded through provider reconciliation")
+    if target == "GENERATED":
+        attempt = _active_attempt(shot)
+        if attempt is None or attempt.get("remote_status") != "COMPLETED":
+            raise StateError("GENERATED requires recorded provider completion evidence")
+        attempt.update({"resolution": "RECORDED", "resolved_at": utc_now()})
+        shot["generation"]["active_attempt_id"] = None
     if target == "FINAL_COMPLETE":
         if (shot.get("start_frame_qc") or {}).get("status") != "PASSED":
             raise StateError("final gate failed; start-frame QC is not passed")
@@ -1861,8 +2309,28 @@ def validate(root: str | Path) -> list[str]:
             errors.append(f"shot {shot.get('id')}: locked without approval")
         if shot.get("generation", {}).get("status") not in GENERATION_STATES:
             errors.append(f"shot {shot.get('id')}: invalid generation status")
-        if shot.get("generation", {}).get("status") in {"QUEUED", "GENERATING", "GENERATED", "FINAL_COMPLETE"}:
+        if shot.get("generation", {}).get("status") == "READY":
             errors.extend(f"shot {shot.get('id')}: {message}" for message in shot_gate_errors(state, shot))
+        active_id = shot.get("generation", {}).get("active_attempt_id")
+        attempts = shot.get("generation", {}).get("attempts")
+        generation_status = shot.get("generation", {}).get("status")
+        if not isinstance(attempts, list):
+            errors.append(f"shot {shot.get('id')}: generation attempts must be an array")
+        elif active_id and not any(item.get("attempt_id") == active_id for item in attempts if isinstance(item, dict)):
+            errors.append(f"shot {shot.get('id')}: active generation attempt does not exist")
+        if generation_status in {"SUBMITTING", "SUBMISSION_AMBIGUOUS"} and not active_id:
+            errors.append(f"shot {shot.get('id')}: {generation_status} requires an active submission attempt")
+        active_statuses = {
+            "SUBMITTING", "SUBMISSION_AMBIGUOUS", "SUBMITTED", "QUEUED",
+            "RUNNING", "REMOTE_UNKNOWN", "PROVIDER_COMPLETED",
+        }
+        if active_id and generation_status not in active_statuses:
+            errors.append(f"shot {shot.get('id')}: active submission attempt is inconsistent with {generation_status}")
+        if generation_status in {"SUBMITTED", "QUEUED", "RUNNING", "REMOTE_UNKNOWN", "PROVIDER_COMPLETED"}:
+            if not active_id:
+                errors.append(f"shot {shot.get('id')}: {generation_status} requires an active submission attempt")
+            if not shot.get("generation", {}).get("job_id"):
+                errors.append(f"shot {shot.get('id')}: {generation_status} requires a provider job id")
         if "shot_grammar" not in shot:
             errors.append(f"shot {shot.get('id')}: missing shot_grammar")
         else:
@@ -1877,9 +2345,10 @@ def validate(root: str | Path) -> list[str]:
                 errors.append(f"shot {shot.get('id')}: invalid QC state for {key}")
     approved = state["project"].get("cost_approval", {})
     actual = float(state["costs"].get("actual", {}).get("credits", 0) or 0)
-    if approved.get("status") == "APPROVED" and approved.get("max_credits") is not None:
-        if actual > float(approved["max_credits"]):
-            errors.append("actual credits exceed the approved ceiling")
+    ceiling = approved.get("max_credits")
+    expected_breach = ceiling is not None and actual > float(ceiling)
+    if state["costs"].get("actual", {}).get("ceiling_breach") is not expected_breach:
+        errors.append("actual credit ceiling-breach flag is inconsistent")
     return errors
 
 
@@ -1907,11 +2376,22 @@ def aggregate(root: str | Path) -> dict[str, Any]:
     if state["project"].get("cost_approval", {}).get("status") != "APPROVED":
         blockers.append("비용 상한 승인 필요")
     if state["costs"].get("actual", {}).get("reconciliation_required"):
-        blockers.append("실제 크레딧 사용량 대사 필요")
+        blockers.append("실제 크레딧 사용량 대사 필요 (새 제출은 명시적 위험 승인으로 계속 가능)")
+    if state["costs"].get("actual", {}).get("ceiling_breach"):
+        blockers.append("실제 사용량이 승인 상한을 초과함 (기록은 보존, 새 제출은 중지)")
+    for shot in shots:
+        generation = shot.get("generation", {})
+        status = generation.get("status")
+        if status == "SUBMISSION_AMBIGUOUS":
+            blockers.append(f"{shot.get('id')}: 제출 결과 불명확 — provider history 대사 또는 사용자 위험 승인 필요")
+        elif status == "SUBMITTING":
+            blockers.append(f"{shot.get('id')}: 제출 도중 중단 가능성 — provider history 대사 필요")
+        elif status == "REMOTE_UNKNOWN":
+            blockers.append(f"{shot.get('id')}: 원격 잡 상태 관측 실패 — 같은 job ID로 재조회 필요")
     blockers.extend(
         f"{shot.get('id')}: {message}"
         for shot in shots
-        if shot.get("generation", {}).get("status") in {"READY", "QUEUED"}
+        if shot.get("generation", {}).get("status") == "READY"
         for message in shot_gate_errors(state, shot)
     )
     total = len(shots)

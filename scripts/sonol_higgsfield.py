@@ -55,7 +55,7 @@ def parser() -> argparse.ArgumentParser:
         cmd = sub.add_parser(name)
         cmd.add_argument("production")
 
-    cmd = sub.add_parser("migrate", help="upgrade a v1-v6 production to the current schema")
+    cmd = sub.add_parser("migrate", help="upgrade a v1-v7 production to the current schema")
     cmd.add_argument("production")
 
     cmd = sub.add_parser("validate-grammar", help="validate one production shot grammar")
@@ -192,7 +192,7 @@ def parser() -> argparse.ArgumentParser:
     cmd = sub.add_parser("transition-generation")
     cmd.add_argument("production")
     cmd.add_argument("shot_id")
-    cmd.add_argument("target", choices=sorted(state.GENERATION_STATES))
+    cmd.add_argument("target", choices=("READY", "FAILED", "QC_FAILED", "FINAL_COMPLETE"))
     cmd.add_argument("--actor", default="agent")
     cmd.add_argument("--reason", default="")
 
@@ -210,6 +210,13 @@ def parser() -> argparse.ArgumentParser:
     cmd.add_argument("job_id")
     cmd.add_argument("--result-path")
     cmd.add_argument("--actor", default="agent")
+
+    cmd = sub.add_parser("resolve-submission", help="resolve an unknown submission after provider-history review")
+    cmd.add_argument("production")
+    cmd.add_argument("shot_id")
+    cmd.add_argument("resolution", choices=("NOT_SUBMITTED", "ABANDONED_RISK_ACCEPTED"))
+    cmd.add_argument("--reason", required=True)
+    cmd.add_argument("--actor", default="user")
 
     cmd = sub.add_parser("record-cost")
     cmd.add_argument("production")
@@ -328,6 +335,10 @@ def execute(args: argparse.Namespace) -> Any:
         state.set_qc(p, args.shot_id, args.check, args.status, args.actor, args.note)
     elif args.command == "record-job":
         state.record_job(p, args.shot_id, args.job_id, args.result_path, args.actor)
+    elif args.command == "resolve-submission":
+        state.resolve_submission_ambiguity(
+            p, args.shot_id, args.resolution, args.actor, args.reason
+        )
     elif args.command == "record-cost":
         state.record_actual_cost(p, args.entity_id, args.credits, args.actor, args.job_id)
     return {"ok": True, "command": args.command}

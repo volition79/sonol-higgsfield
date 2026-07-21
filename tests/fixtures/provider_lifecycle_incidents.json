@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "source": "sanitized real-session failure classes",
+  "provider_status_cases": [
+    {"raw": "queued", "expected": "QUEUED"},
+    {"raw": "processing", "expected": "RUNNING"},
+    {"raw": "completed", "expected": "PROVIDER_COMPLETED"},
+    {"raw": "failed", "expected": "FAILED"},
+    {"raw": "new-provider-state", "expected": "REMOTE_UNKNOWN"}
+  ],
+  "interrupt_case": {
+    "event": "KeyboardInterrupt after create started",
+    "expected_status": "SUBMISSION_AMBIGUOUS",
+    "retry_without_resolution": false
+  },
+  "gate_drift_case": {
+    "event": "preflight policy changes after a paid job is accepted",
+    "expected_status": "GENERATED",
+    "provider_observation_must_win": true
+  }
+}

@@ -179,7 +179,7 @@ image guidance is an evidence-led exception: after a documented start-only
 failure, A/B test exactly one indispensable reference with every other variable
 held fixed. Never add a stack of speculative references.
 
-Before board approval, record the v7 start-image review: it is the final first
+Before board approval, record the v8 start-image review: it is the final first
 frame, matches the requested aspect, contains no collage/labels, makes the key
 subject readable, supports the first action, and states off-frame-reveal risk.
 A technically sharp image can still be a poor motion initial condition.
@@ -223,11 +223,13 @@ enumerations of invariants and reference descriptions lower compliance.
 The compiler enforces the selected image-input profile, rejects an `end_image`
 outside `motivated_transition`, and emits at most three critical invariants.
 
-Submit with `--wait --json` only after the guarded runner has re-fetched the
-selected contract, confirmed remaining project-ceiling capacity, and checked
-the current account balance.
-If a wait is interrupted before a job ID is returned, do not retry blindly;
-reconcile provider history first because the original job may still exist.
+Submit without provider waiting only after the guarded runner has re-fetched
+the selected contract, confirmed remaining project-ceiling capacity, and
+checked the current account balance. The runner first persists a `SUBMITTING`
+attempt, then invokes `generate create`, and stores the returned job ID before
+any wait. Do not combine paid submission and a long queue wait in one process.
+If submission ends without a recognized job ID, keep it
+`SUBMISSION_AMBIGUOUS`; never retry blindly because the original job may exist.
 Never silently replace the selected model. If the preferred contract fails
 twice for the same reason, change the prompt, reference package, duration, or
 model with a recorded rationale and renewed ceiling approval when needed.
@@ -244,6 +246,24 @@ Add `--authorize-local-upload` only when the user approved the local reference
 files. The runner rechecks gates, remaining ceiling, and current account credits
 before submission and never calls `generate cost`. Without an exact quote, the
 ceiling is a preflight control, not a guaranteed hard cap on one submitted job.
+
+Observe or recover that attempt separately:
+
+```bash
+python3 "$SONOL_HIGGSFIELD_SKILL/scripts/run_shot.py" \
+  <production> <shot_id> --reconcile [--wait] [--job-id <provider_job_id>]
+```
+
+With no stored ID, automatic history recovery binds only one high-confidence
+match using provider, prompt hash, stable parameters, and submission time. Zero
+or multiple matches remain ambiguous for manual selection. A wait interruption
+with a known ID becomes `REMOTE_UNKNOWN` and remains safe to query again. New
+planning gates apply only before submission; they never block recording a
+provider-completed result or its actual cost. If the provider omits credits,
+record a pending reconciliation and any account-balance delta as non-authoritative
+evidence. A user may continue with `--acknowledge-pending-costs`; the attempt
+history records that risk acceptance. Above-ceiling actual cost is always
+recorded and flagged `ceiling_breach`; it is never hidden by the ceiling gate.
 
 ### 7. Inspect immediately and route audio conditionally
 
@@ -352,7 +372,7 @@ python3 "$SONOL_HIGGSFIELD_SKILL/scripts/sonol_higgsfield.py" set-adaptive-story
   NOT_APPLICABLE --previous-shot-id <shot_id>
 ```
 
-Schema v7 blocks paid generation until the start image passes preparation
+Schema v8 blocks paid generation until the start image passes preparation
 review, and blocks the next shot until the immediate previous shot is generated,
 user-accepted, first-frame-QC passed, boundary-analyzed, and bound to the next
 adaptive plan. A cut/reset start image must carry just-in-time provenance after

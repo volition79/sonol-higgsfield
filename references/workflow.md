@@ -60,12 +60,14 @@ Store the approved provider call and its generated fingerprint as
 
 ### F. Generation
 
-Generate one dependent shot at a time. Record the exact job ID, arguments,
-model contract snapshot, result path, and actual credits. Inspect before the
+Generate one dependent shot at a time. Persist a submission attempt before the
+provider call, submit without waiting, and store the exact job ID immediately.
+Observe that known job in a separate reconcile command. Record the arguments,
+model contract snapshot, result path, provider observations, and actual credits. Inspect before the
 next shot that depends on its end state: compare the rendered first frame to
 the submitted start image, score eight boundary candidates from the final half
 second, record the director-selected frame and semantic observations, and bind
-the next shot to that analysis before compiling. Schema v7 also blocks paid
+the next shot to that analysis before compiling. Schema v8 also blocks paid
 generation without start-image preparation review and blocks out-of-order
 dependent generation or stale/pre-produced cut/reset start images.
 
@@ -86,22 +88,42 @@ probe the export.
 2. Read `data/project.json`, then the newest events in `data/history.json`.
 3. Refresh the live schema if the previous snapshot is from another session or
    the CLI version changed.
-4. Reconcile completed provider jobs by job ID; do not resubmit an ambiguous
-   job merely because a local wait was interrupted.
+4. Reconcile active attempts by job ID. With no ID, allow automatic binding only
+   when provider history has one fingerprint/time-window match; otherwise use
+   manual `--job-id`. Do not resubmit merely because a local process stopped.
 5. Resume from the earliest failed gate, not the latest-looking media file.
 6. Refresh `dashboard/project-data.js` after reconciliation.
 
 ## Failure recovery
 
-### Provider command rejected before submission
+### Submission ended without a recognized job ID
 
-No credit-bearing job is known. Reinspect the current model/workflow contract,
-correct flags and record the reason. Do not silently switch model.
+The attempt stays `SUBMISSION_AMBIGUOUS`. Search provider history using the
+stored provider, prompt hash, stable arguments, and submission time. Bind one
+unambiguous match; if several match, require an exact `--job-id`. Return to a
+retryable state only after evidence confirms `NOT_SUBMITTED`, or after the user
+explicitly accepts abandonment and possible duplicate-charge risk.
 
-### Submission returned a job ID but waiting failed
+### Submission returned a job ID but observation failed
 
-Use `higgsfield generate get <job_id>` or `wait <job_id>`. Treat a retry as a
-new paid job and ask again if it could exceed the remaining ceiling.
+Keep the ID and set `REMOTE_UNKNOWN`. Use `run_shot.py --reconcile`, optionally
+with `--wait`, against that same ID. Queue duration is not a local failure and
+does not justify a new paid submission.
+
+### Provider completed after plans or gates changed
+
+Record `PROVIDER_COMPLETED`, the result, and any actual cost without re-running
+mutable pre-submit gates. The ceiling and board policy control new submissions;
+they cannot rewrite or conceal provider truth that already occurred.
+
+### Provider response omitted actual credits
+
+Keep the result usable and add a pending ledger entry. Account balance before
+and after the attempt may be shown as a candidate only, because concurrent jobs,
+free credits, or adjustments can contaminate the delta. Record confirmed credits
+with `--credits`. Pending entries pause new submissions by default, but the user
+may explicitly continue with `--acknowledge-pending-costs`; that decision is
+persisted on the new attempt rather than creating a permanent deadlock.
 
 ### Media fails internal QC
 
