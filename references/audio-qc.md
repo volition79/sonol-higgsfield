@@ -24,7 +24,8 @@ For visible speech, finish audio before paid video generation:
 2. Lock script wording, pronunciation, emotional direction, pauses, and timing.
 3. Generate and approve one clean master without music, effects, or room tone.
 4. Store the master path in `audio.dialogue_master_path` and
-   `references.audios`; keep at least one visual reference for Seedance.
+   `references.audios`, and store `audio.dialogue_master_sha256`; the sole
+   `start_image` satisfies Seedance visual-reference requirements.
 5. Compile `audio_mode=audio_reference` and `generate_audio=true`.
 6. After generation, review lip sync manually, strip the Seedance-rendered
    audio, and remux the unchanged approved master.
@@ -33,6 +34,12 @@ For multiple visible speakers, use distinct locked voices and either an
 authorized ElevenLabs dialogue workflow or separately timed speaker tracks.
 Do not claim multi-speaker support from the bundled single-speaker helper unless
 the exact live tool/API contract proves it.
+
+For off-screen narration, store `audio.narration_master_path` and
+`audio.narration_master_sha256`. It is never sent to Seedance; it is protected
+as the authoritative recording and added in the final external mix. Adaptive
+story revisions must snapshot the matching dialogue or narration fingerprint
+and explicitly declare `UNCHANGED` or `RERECORDED`.
 
 ## Korean dialogue
 

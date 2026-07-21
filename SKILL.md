@@ -57,6 +57,14 @@ Do not generate final assets while any required field is `UNKNOWN` or
 `CONFLICT`. Show the completed production specification and require an explicit
 user approval before running `lock-requirements --actor user`.
 
+Store the non-negotiable turning points as explicit anchor beats and require
+the user to lock them before any paid shot:
+
+```bash
+python3 "$SONOL_HIGGSFIELD_SKILL/scripts/sonol_higgsfield.py" lock-story \
+  <production> '[{"id":"BEAT_001","description":"<fixed turn>"}]' --actor user
+```
+
 ### 2. Create the dashboard and production plan
 
 Initialization creates the static dashboard template and split JSON state.
@@ -192,13 +200,16 @@ Apply the single-start-image video contract, enforced by the generation gate:
 - `end_image` only for a declared `motivated_transition`.
 - `audio_references` only for the locked dialogue master on a visible-dialogue
   route (the start image satisfies the visual-reference requirement).
-- If identity drifts late in a clip, retry with one tight face reference added
-  back as the single recorded change — never as a default.
+- If identity drifts late in a clip, shorten or reset the shot and recompose its
+  single start image; do not bypass the compiler with an extra face reference.
 
 Keep the prompt compact and high-probability: shot spec, subject and one
 action, one camera move, lighting and mood, an explicit instruction to begin
 exactly on the provided start image framing, and the exit state. Long
 enumerations of invariants and reference descriptions lower compliance.
+The Seedance compiler enforces `start_image`, rejects `image_references`, rejects
+an `end_image` outside `motivated_transition`, and emits at most three critical
+invariants.
 
 Submit with `--wait --json` only after the guarded runner has re-fetched the
 selected contract, confirmed remaining project-ceiling capacity, and checked
@@ -232,7 +243,8 @@ Inspect every completed shot before generating the next dependent shot. Read
 - `INTENTIONAL_SILENCE`: use `audio_mode=none` only when the final shot itself
   must remain silent.
 - `OFFSCREEN_NARRATION`: generate picture with `audio_mode=post_only`; create
-  narration separately and add it only in the final mix.
+  narration separately, store its approved master path and SHA-256 fingerprint,
+  and add it only in the final mix.
 - `VISIBLE_DIALOGUE_ELEVENLABS_V3`: lock the final ElevenLabs `eleven_v3`
   dialogue master first, pass that unchanged file through Seedance
   `audio_references` with `audio_mode=audio_reference`, inspect lip sync, discard
@@ -252,9 +264,9 @@ unless a concrete provider or deterministic checker produced evidence.
 
 Run the sequential adaptive loop after every accepted shot:
 
-1. Extract the boundary frame with `media_pipeline.py boundary-frames` — prefer
-   the sharpest frame within the final half second over a motion-blurred exact
-   last frame.
+1. Extract the boundary frame with `media_pipeline.py boundary-frames`. It
+   samples eight frames in the final 0.5 seconds, scores each with FFmpeg
+   `blurdetect`, and writes the lowest-blur candidate plus timestamp and score.
 2. Analyze that frame against the story plan: pose, gaze, props, framing,
    lighting, emotional state.
 3. Micro-adjust the next shot's action and prompt to match the frame, keeping
@@ -297,6 +309,27 @@ python3 "$SONOL_HIGGSFIELD_SKILL/scripts/sonol_higgsfield.py" set-boundary \
   --planned-keyframe <current_keyframe.png> --reason "<director rationale>"
 ```
 
+After generation, persist first-frame comparison and the semantic boundary
+reading. The technical selector is deterministic; pose, gaze, hands, props,
+framing, lighting, and emotion remain an agent/director judgment that must be
+recorded rather than claimed as an automatic vision score:
+
+```bash
+python3 "$SONOL_HIGGSFIELD_SKILL/scripts/sonol_higgsfield.py" record-start-frame-qc \
+  <production> <shot_id> <rendered_first.png> PASSED
+python3 "$SONOL_HIGGSFIELD_SKILL/scripts/sonol_higgsfield.py" record-boundary-analysis \
+  <production> <shot_id> <selected_boundary.png> '<observations-json>' \
+  '<boundary-selection-json>' "<next-story adjustment>"
+python3 "$SONOL_HIGGSFIELD_SKILL/scripts/sonol_higgsfield.py" set-adaptive-story \
+  <production> <next_shot_id> '["BEAT_001"]' "<adjustment rationale>" \
+  NOT_APPLICABLE --previous-shot-id <shot_id>
+```
+
+Schema v5 blocks the next shot until the immediate previous shot is generated,
+user-accepted, first-frame-QC passed, boundary-analyzed, and bound to the next
+adaptive plan. A cut/reset start image must carry just-in-time provenance after
+that previous shot. Chained shots must use the exact recorded boundary frame.
+
 Extract the end of the previous shot and the start of the next with
 `media_pipeline.py`. Compare face, hair, costume, body and hand pose, gaze,
 movement direction, prop and location state, camera axis, lens feel, exposure,
@@ -328,6 +361,11 @@ shots, QC gaps, and any manual checks still required.
   single start image, and only a `motivated_transition` may add an `end_image`.
 - Never pre-produce start frames beyond the next shot to generate; compose them
   just-in-time from the current story state.
+- Never queue a dependent shot without a user-locked story contract, accepted
+  prior shot, boundary-analysis ID, passed first-frame QC, and matching JIT
+  start-image provenance.
+- Never treat recorded dialogue or narration as fixed without its approved
+  SHA-256 fingerprint in both the audio plan and adaptive story snapshot.
 - Never accept a shot without comparing its actual first frame to the submitted
   start image.
 - Never combine multiple primary camera moves unless the user accepts an experimental A/B test.

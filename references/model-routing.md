@@ -21,10 +21,13 @@ Use this as a decision tree, then verify the selected live schema and account ba
   inspect the corresponding live model/workflow. Never force every shot through
   one model if the contract cannot express it.
 
-Prefer start/end references for explicit boundary control. Use image references
-for identity, costume, location, product, and visual language. Use video
-references only when motion or camera language materially matters. Use audio
-references only when the selected contract documents their effect.
+For Seedance video, pass exactly one `start_image`; add `end_image` only for a
+declared motivated transition. Use character, costume, location, product, and
+visual-language image references only in the image-model composition step that
+creates that start image. The Seedance compiler rejects `image_references` in
+the paid video transport. Use video references only when motion or camera
+language materially matters and its rationale is recorded. Use audio references
+only for the locked visible-dialogue master.
 
 ## Audio
 

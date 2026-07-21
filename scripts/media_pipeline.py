@@ -5,15 +5,20 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import shutil
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from typing import Any
 
 
 class MediaError(RuntimeError):
     pass
+
+
+BLUR_MEAN_RE = re.compile(r"blur mean:\s*([0-9]+(?:\.[0-9]+)?)", re.IGNORECASE)
 
 
 def executable(name: str) -> str:
@@ -44,6 +49,155 @@ def run(command: list[str], dry_run: bool = False) -> dict[str, object]:
         raise MediaError((completed.stderr or completed.stdout).strip())
     stderr_lines = [line for line in completed.stderr.splitlines() if "warning" in line.casefold()]
     return {"ok": True, "command": command, "warnings": stderr_lines[-10:]}
+
+
+def probe_duration(ffprobe: str, source: Path) -> float:
+    command = [
+        ffprobe,
+        "-v",
+        "error",
+        "-show_entries",
+        "format=duration",
+        "-of",
+        "default=noprint_wrappers=1:nokey=1",
+        str(source),
+    ]
+    completed = subprocess.run(command, text=True, capture_output=True, timeout=60, check=False)
+    if completed.returncode:
+        raise MediaError(completed.stderr.strip() or "ffprobe could not read video duration")
+    try:
+        duration = float(completed.stdout.strip())
+    except ValueError as exc:
+        raise MediaError("ffprobe returned an invalid video duration") from exc
+    if duration <= 0:
+        raise MediaError("video duration must be positive")
+    return duration
+
+
+def boundary_candidate_timestamps(duration: float, *, window_seconds: float = 0.5, count: int = 8) -> list[float]:
+    """Return deterministic candidate times from the final boundary window."""
+    if duration <= 0:
+        raise MediaError("video duration must be positive")
+    if window_seconds <= 0:
+        raise MediaError("boundary window must be positive")
+    if count < 2:
+        raise MediaError("at least two boundary candidates are required")
+    start = max(0.0, duration - window_seconds)
+    decode_margin = min(0.05, duration / 2)
+    end = max(start, duration - decode_margin)
+    step = (end - start) / (count - 1)
+    return [round(start + step * index, 6) for index in range(count)]
+
+
+def parse_blur_score(stderr: str) -> float:
+    matches = BLUR_MEAN_RE.findall(stderr)
+    if not matches:
+        raise MediaError("ffmpeg blurdetect did not return a blur mean")
+    return float(matches[-1])
+
+
+def blur_score(ffmpeg: str, image: Path) -> float:
+    command = [
+        ffmpeg,
+        "-hide_banner",
+        "-nostats",
+        "-i",
+        str(image),
+        "-vf",
+        "blurdetect=block_width=32:block_height=32:block_pct=80",
+        "-frames:v",
+        "1",
+        "-f",
+        "null",
+        "-",
+    ]
+    completed = subprocess.run(command, text=True, capture_output=True, timeout=60, check=False)
+    if completed.returncode:
+        raise MediaError(completed.stderr.strip() or "ffmpeg blur scoring failed")
+    return parse_blur_score(completed.stderr)
+
+
+def select_sharpest_candidate(candidates: list[dict[str, Any]]) -> dict[str, Any]:
+    """Choose the lowest blur score, preferring the later frame on a tie."""
+    if not candidates:
+        raise MediaError("no boundary candidates were produced")
+    return min(candidates, key=lambda item: (float(item["blur_score"]), -float(item["timestamp"])))
+
+
+def extract_boundary_frames(
+    ffmpeg: str,
+    ffprobe: str,
+    source: Path,
+    folder: Path,
+    *,
+    dry_run: bool = False,
+    window_seconds: float = 0.5,
+    candidate_count: int = 8,
+) -> dict[str, Any]:
+    start = output_path(folder / "start.png")
+    end = output_path(folder / "end.png")
+    first_command = [ffmpeg, "-y", "-i", str(source), "-frames:v", "1", "-update", "1", str(start)]
+    if dry_run:
+        return {
+            "start": str(start),
+            "end": str(end),
+            "selection": {
+                "method": "lowest_ffmpeg_blurdetect_mean",
+                "window_seconds": window_seconds,
+                "candidate_count": candidate_count,
+            },
+            "commands": [{"dry_run": True, "command": first_command}],
+        }
+    first = run(first_command)
+    duration = probe_duration(ffprobe, source)
+    candidates: list[dict[str, Any]] = []
+    commands: list[dict[str, object]] = [first]
+    with tempfile.TemporaryDirectory(prefix="sonol-boundary-") as temporary:
+        candidate_dir = Path(temporary)
+        for index, timestamp in enumerate(
+            boundary_candidate_timestamps(duration, window_seconds=window_seconds, count=candidate_count)
+        ):
+            image = candidate_dir / f"candidate_{index:02d}.png"
+            extract_command = [
+                ffmpeg,
+                "-y",
+                "-i",
+                str(source),
+                "-ss",
+                f"{timestamp:.6f}",
+                "-frames:v",
+                "1",
+                "-update",
+                "1",
+                str(image),
+            ]
+            commands.append(run(extract_command))
+            candidates.append(
+                {
+                    "timestamp": timestamp,
+                    "blur_score": blur_score(ffmpeg, image),
+                    "path": str(image),
+                }
+            )
+        selected = select_sharpest_candidate(candidates)
+        shutil.copy2(Path(str(selected["path"])), end)
+    public_candidates = [
+        {"timestamp": item["timestamp"], "blur_score": item["blur_score"]}
+        for item in candidates
+    ]
+    return {
+        "start": str(start),
+        "end": str(end),
+        "selection": {
+            "method": "lowest_ffmpeg_blurdetect_mean",
+            "window_seconds": window_seconds,
+            "candidate_count": candidate_count,
+            "selected_timestamp": selected["timestamp"],
+            "selected_blur_score": selected["blur_score"],
+            "candidates": public_candidates,
+        },
+        "commands": commands,
+    }
 
 
 def atempo_chain(factor: float) -> str:
@@ -128,6 +282,8 @@ def main() -> int:
     cmd = sub.add_parser("boundary-frames")
     cmd.add_argument("input", type=Path)
     cmd.add_argument("output_dir", type=Path)
+    cmd.add_argument("--window-seconds", type=float, default=0.5)
+    cmd.add_argument("--candidates", type=int, default=8)
 
     cmd = sub.add_parser("extract-audio")
     cmd.add_argument("input", type=Path)
@@ -183,11 +339,15 @@ def main() -> int:
             source = checked_input(args.input)
             folder = args.output_dir.expanduser().resolve()
             folder.mkdir(parents=True, exist_ok=True)
-            start = output_path(folder / "start.png")
-            end = output_path(folder / "end.png")
-            first = run([ffmpeg, "-y", "-i", str(source), "-frames:v", "1", "-update", "1", str(start)], args.dry_run)
-            second = run([ffmpeg, "-y", "-sseof", "-0.05", "-i", str(source), "-frames:v", "1", "-update", "1", str(end)], args.dry_run)
-            result = {"start": str(start), "end": str(end), "commands": [first, second]}
+            result = extract_boundary_frames(
+                ffmpeg,
+                ffprobe,
+                source,
+                folder,
+                dry_run=args.dry_run,
+                window_seconds=args.window_seconds,
+                candidate_count=args.candidates,
+            )
         elif args.command == "extract-audio":
             source, target = checked_input(args.input), output_path(args.output)
             result = run([ffmpeg, "-y", "-i", str(source), "-vn", "-c:a", "pcm_s24le", str(target)], args.dry_run)

@@ -29,12 +29,12 @@ motion must remain intact, inspect the live `video_upscale` or
 The compiler emits:
 
 1. shot count, total duration, aspect ratio, and shot mode;
-2. subject and one primary action;
-3. setting and lighting;
+2. an instruction to begin on the provided start-image framing;
+3. subject and one primary action;
 4. one primary camera movement plus framing/focus;
-5. mood and style;
+5. setting, lighting, and mood in one compact clause;
 6. numbered timecoded beats only for approved experimental multi-shot;
-7. end state, camera invariants, and audio route.
+7. end state, at most three critical invariants, and audio route.
 
 Use precise camera verbs such as `dolly in`, `truck left`, `arc shot`,
 `push in`, `pull back wide`, `handheld follow`, `crane up`, or `orbital move`.
@@ -62,17 +62,18 @@ two wide composition references opened wide). Therefore a paid Seedance call
 carries exactly one `start_image`; `end_image` only for a declared motivated
 transition; `audio_references` only for a locked dialogue master. Character,
 location, prop, and style references are consumed by the image model that
-composes the start frame, never by the video call. Add one tight face
-reference back only as a recorded retry against observed late-clip identity
-drift. Always instruct the prompt to begin exactly on the provided start image
-framing, and QC the rendered first frame against the submitted start image.
+composes the start frame, never by the video call. If identity drifts, shorten
+or reset the shot and recompose the start image rather than adding a face
+reference. Always instruct the prompt to begin exactly on the provided start
+image framing, and QC the rendered first frame against the submitted start image.
 
-Keep semantic intent separate from the CLI transport:
+Keep start-frame composition inputs outside the video-call references. This is
+an image-composition record, not a Seedance transport manifest:
 
 ```json
 {
   "semantic_role": "character",
-  "transport_field": "image_references",
+  "composition_role": "character_reference",
   "source": "media/images/CHAR_001_v3.png",
   "controls": ["identity", "hair", "wardrobe"],
   "locked_asset_id": "CHAR_001",
@@ -80,17 +81,18 @@ Keep semantic intent separate from the CLI transport:
 }
 ```
 
-Allowed transport fields are `start_image`, `end_image`,
-`image_references`, `video_references`, and `audio_references`. The Higgsfield
-web guide describes semantic `@character`, `@style`, `@motion`, and `@audio`
-references, but the current CLI schema exposes only transport arrays. Keep
-`prompt_alias` null and never invent `@` aliases for a CLI command.
+The live provider schema may expose `image_references`, but this production
+compiler deliberately rejects them for Seedance video. Allowed production
+transport is one `start_image`, optional `end_image` only for a motivated
+transition, explicitly justified `video_references`, and the locked visible
+dialogue `audio_references`. Never invent web `@` aliases for a CLI command.
 
 Apply the live limits fail-closed (under the single-start-image contract the
 image budget is consumed by the start-frame composition step, not the video
 call):
 
-- images plus start/end: at most 9;
+- production policy: one start image, optional motivated-transition end image,
+  and zero `image_references` in the video call;
 - videos: at most 3;
 - audios: at most 3;
 - all references including start/end: at most 12;

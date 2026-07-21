@@ -31,8 +31,10 @@ strategy resolves to **exactly one start image** in the video call.
 | `scene_reset` | Place, time, style, or story unit changes | Freshly composed keyframe, required | Same image (it is the start image) |
 
 Extract the accepted previous clip's boundary frame, never a rejected
-candidate's frame. Prefer the sharpest frame within the final half second over
-a motion-blurred exact last frame. Do not propagate a frame before visual QC
+candidate's frame. `media_pipeline.py boundary-frames` samples eight candidates
+from the final 0.5 seconds and selects the lowest FFmpeg `blurdetect` mean,
+preferring the later candidate on a tie. Preserve its timestamp, score, and
+candidate ledger as technical evidence. Do not propagate a frame before visual QC
 because identity, hand, prop, or background defects would become the next
 generation's initial condition.
 
@@ -62,6 +64,13 @@ shot:
 4. Wire the boundary, compile a compact prompt, and generate.
 5. Compare the new clip's actual first frame against the submitted start image
    before accepting it.
+
+Persist these steps with `record-start-frame-qc`,
+`record-boundary-analysis`, and `set-adaptive-story`. The state gate requires
+the previous user acceptance, first-frame pass, analysis ID, current locked
+story-contract version, and JIT start provenance before a dependent shot can be
+queued. Semantic observations remain explicit agent/director judgments; only
+frame sampling and blur scoring are automatic.
 
 ## Structured shot grammar
 
@@ -104,9 +113,9 @@ The video call and the start-frame composition step have different transports:
 
 Identity control in the video call comes from the start image itself, because
 it was composed from the locked references. If identity drifts late in a clip,
-retry with one tight face reference added back as the single recorded change —
-never as a default, because every extra image competes with the start frame's
-framing.
+shorten or reset the shot and recompose its single start image. Do not add a
+face reference to the Seedance call because every extra image competes with the
+start frame's framing and the production compiler rejects it.
 
 For Seedance, record each reference in `references.manifest` with its semantic
 role, CLI transport field, source, controlled traits, locked asset ID, and a

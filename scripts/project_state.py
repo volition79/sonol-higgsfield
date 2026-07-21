@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import tempfile
 from copy import deepcopy
@@ -16,7 +17,7 @@ import cinematography
 import execution_contract
 
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 REQUIRED_REQUIREMENTS = (
     "purpose",
     "core_message",
@@ -102,6 +103,9 @@ AUDIO_ROUTES = {
     "OFFSCREEN_NARRATION",
     "VISIBLE_DIALOGUE_ELEVENLABS_V3",
 }
+BOUNDARY_OBSERVATION_FIELDS = ("pose", "gaze", "hands", "props", "framing", "lighting", "emotion")
+DIALOGUE_IMPACTS = {"NOT_APPLICABLE", "UNCHANGED", "RERECORDED"}
+SHA256_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 DATA_FILES = (
     "project.json",
     "requirements.json",
@@ -201,6 +205,11 @@ def default_boundary_plan() -> dict[str, Any]:
         "planned_keyframe_role": "none",
         "cut_type": None,
         "reason": None,
+        "start_image_provenance": {
+            "mode": None,
+            "created_after_shot_id": None,
+            "created_at": None,
+        },
     }
 
 
@@ -212,9 +221,66 @@ def default_audio_plan() -> dict[str, Any]:
         "voice_model": None,
         "voice_ids": [],
         "dialogue_master_path": None,
+        "dialogue_master_sha256": None,
+        "narration_master_path": None,
+        "narration_master_sha256": None,
         "discard_generated_track": False,
         "final_mix_required": True,
         "final_mix_path": None,
+    }
+
+
+def default_story_contract() -> dict[str, Any]:
+    return {
+        "status": "DRAFT",
+        "version": 0,
+        "anchor_beats": [],
+        "locked_by": None,
+        "locked_at": None,
+    }
+
+
+def default_shot_story() -> dict[str, Any]:
+    return {
+        "anchor_beat_ids": [],
+        "story_contract_version": None,
+        "adaptive_revision": 0,
+        "based_on_previous_shot_id": None,
+        "based_on_boundary_analysis_id": None,
+        "adjustment_reason": None,
+        "dialogue_impact": "NOT_APPLICABLE",
+        "dialogue_master_sha256": None,
+        "recorded_audio_sha256": None,
+    }
+
+
+def default_boundary_analysis() -> dict[str, Any]:
+    return {
+        "status": "PENDING",
+        "analysis_id": None,
+        "frame_path": None,
+        "observations": {key: None for key in BOUNDARY_OBSERVATION_FIELDS},
+        "technical": {
+            "selection_method": None,
+            "window_seconds": None,
+            "selected_timestamp": None,
+            "selected_blur_score": None,
+            "candidates": [],
+        },
+        "next_story_adjustment": None,
+        "analyzed_by": None,
+        "analyzed_at": None,
+    }
+
+
+def default_start_frame_qc() -> dict[str, Any]:
+    return {
+        "status": "PENDING",
+        "submitted_start_path": None,
+        "rendered_first_frame_path": None,
+        "reviewed_by": None,
+        "reviewed_at": None,
+        "notes": None,
     }
 
 
@@ -255,6 +321,7 @@ def initialize(root: str | Path, name: str, template_dir: Path) -> Path:
             "approved_at": None,
             "unpriced_job_risk_acknowledged": False,
         },
+        "story_contract": default_story_contract(),
     }
     requirements = _base_document() | {
         "fields": {
@@ -308,7 +375,7 @@ def migrate(root: str | Path) -> dict[str, Any]:
     if versions == {SCHEMA_VERSION}:
         return {"migrated": False, "schema_version": SCHEMA_VERSION}
     only_version = next(iter(versions)) if len(versions) == 1 else None
-    if only_version not in {1, 2, 3}:
+    if only_version not in {1, 2, 3, 4}:
         raise StateError(f"cannot migrate mixed or unsupported schema versions: {sorted(versions, key=str)}")
     assert isinstance(only_version, int)
     from_version = only_version
@@ -327,6 +394,11 @@ def migrate(root: str | Path) -> dict[str, Any]:
         references = shot.setdefault("references", {})
         references.setdefault("manifest", [])
         shot.setdefault("boundary", default_boundary_plan())
+        boundary = shot["boundary"]
+        boundary.setdefault("start_image_provenance", deepcopy(default_boundary_plan()["start_image_provenance"]))
+        shot.setdefault("story", default_shot_story())
+        shot.setdefault("boundary_analysis", default_boundary_analysis())
+        shot.setdefault("start_frame_qc", default_start_frame_qc())
         audio = shot.setdefault("audio", {})
         for key, value in default_audio_plan().items():
             audio.setdefault(key, deepcopy(value))
@@ -341,6 +413,7 @@ def migrate(root: str | Path) -> dict[str, Any]:
     approval.pop("task_contracts", None)
     approval.setdefault("mode", "PROJECT_CEILING")
     approval.setdefault("unpriced_job_risk_acknowledged", approval.get("status") == "APPROVED")
+    state["project"].setdefault("story_contract", default_story_contract())
     costs = state["costs"]
     costs.pop("scenarios", None)
     costs.pop("task_estimates", None)
@@ -631,6 +704,9 @@ def add_shot(root: str | Path, shot_id: str, scene_id: str, title: str, order: i
             "next_scene_setup": None,
         },
         "boundary": default_boundary_plan(),
+        "story": default_shot_story(),
+        "boundary_analysis": default_boundary_analysis(),
+        "start_frame_qc": default_start_frame_qc(),
         "required_asset_ids": [],
         "references": {
             "start": None,
@@ -693,6 +769,7 @@ def update_shot(root: str | Path, shot_id: str, patch: dict[str, Any], actor: st
         "execution",
         "shot_grammar",
         "seedance_plan",
+        "story",
     }
     unknown = sorted(set(patch) - allowed)
     if unknown:
@@ -724,7 +801,7 @@ def update_shot(root: str | Path, shot_id: str, patch: dict[str, Any], actor: st
             shot["shot_grammar"] = cinematography.merge_grammar(shot.get("shot_grammar"), value)
         except cinematography.CinematographyError as exc:
             raise StateError(str(exc)) from exc
-    for nested in ("continuity", "boundary", "references", "audio", "seedance_plan"):
+    for nested in ("continuity", "boundary", "references", "audio", "seedance_plan", "story"):
         if nested in normalized:
             value = normalized.pop(nested)
             if not isinstance(value, dict):
@@ -771,25 +848,52 @@ def set_boundary(
         raise StateError(f"invalid boundary strategy: {strategy}")
     if not reason.strip():
         raise StateError("boundary reason is required")
-    shots = read_json(data_dir(root) / "shots.json")
+    all_state = load_all(root)
+    shots = all_state["shots"]
     shot = _find(shots.get("items", []), shot_id, "shot")
+    ordered = ordered_shots(all_state)
+    shot_index = next(index for index, item in enumerate(ordered) if item.get("id") == shot_id)
+    chronological_previous = ordered[shot_index - 1] if shot_index else None
+    chronological_previous_id = chronological_previous.get("id") if chronological_previous else None
+    previous_analysis: dict[str, Any] = {}
+    if chronological_previous is not None:
+        if chronological_previous.get("generation", {}).get("status") not in {"GENERATED", "FINAL_COMPLETE"}:
+            raise StateError("next boundary cannot be set before the previous sequential shot is generated")
+        if chronological_previous.get("qc", {}).get("user_review") != "PASSED":
+            raise StateError("next boundary cannot be set before previous user acceptance")
+        if (chronological_previous.get("start_frame_qc") or {}).get("status") != "PASSED":
+            raise StateError("next boundary cannot be set before previous start-frame QC passes")
+        previous_analysis = chronological_previous.get("boundary_analysis") or {}
+        if previous_analysis.get("status") != "COMPLETE":
+            raise StateError("next boundary cannot be set before previous boundary analysis")
     references = deepcopy(shot.get("references") or {})
     # Single-start-image video contract: the paid video call carries exactly
     # one start image; identity/location/prop references belong to the
     # start-frame composition step, never to the video generation call.
     references["images"] = []
+    references["end"] = None
     if strategy in {"continuous_match", "motivated_transition"}:
         if not previous_shot_id or not previous_frame:
             raise StateError("continuous boundary requires previous_shot_id and previous_frame")
+        if chronological_previous_id is None or previous_shot_id != chronological_previous_id:
+            raise StateError("chained boundary must use the immediate previous sequential shot")
+        if previous_frame != previous_analysis.get("frame_path"):
+            raise StateError("chained boundary must use the selected previous boundary-analysis frame")
         references["start"] = previous_frame
         inherit = True
+        provenance = {"mode": "previous_boundary", "created_after_shot_id": previous_shot_id, "created_at": utc_now()}
     else:
         if not planned_keyframe:
             raise StateError("editorial cut or scene reset requires a composed planned_keyframe start image")
-        previous_shot_id = None
+        previous_shot_id = chronological_previous_id
         previous_frame = None
         references["start"] = planned_keyframe
         inherit = False
+        provenance = {
+            "mode": "initial_composition" if chronological_previous_id is None else "jit_composition",
+            "created_after_shot_id": chronological_previous_id,
+            "created_at": utc_now(),
+        }
     if strategy == "motivated_transition":
         if not planned_keyframe:
             raise StateError("motivated transition requires planned_keyframe")
@@ -814,8 +918,231 @@ def set_boundary(
                 "planned_keyframe_role": role,
                 "cut_type": cut_type,
                 "reason": reason,
+                "start_image_provenance": provenance,
             },
             "references": references,
+        },
+        actor,
+    )
+
+
+def lock_story_contract(root: str | Path, anchor_beats: list[dict[str, Any]], actor: str) -> None:
+    if actor != "user":
+        raise StateError("only the user may lock story anchor beats")
+    if not isinstance(anchor_beats, list) or not anchor_beats:
+        raise StateError("story contract requires at least one anchor beat")
+    normalized: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for offset, beat in enumerate(anchor_beats):
+        if not isinstance(beat, dict):
+            raise StateError(f"anchor beat {offset + 1} must be an object")
+        beat_id = beat.get("id")
+        description = beat.get("description")
+        if not isinstance(beat_id, str) or not beat_id.strip():
+            raise StateError(f"anchor beat {offset + 1} requires id")
+        if not isinstance(description, str) or not description.strip():
+            raise StateError(f"anchor beat {offset + 1} requires description")
+        if beat_id in seen:
+            raise StateError(f"duplicate anchor beat id: {beat_id}")
+        seen.add(beat_id)
+        normalized.append({"id": beat_id, "description": description.strip()})
+    path = data_dir(root) / "project.json"
+    project = read_json(path)
+    current = project.get("story_contract") or default_story_contract()
+    version = int(current.get("version", 0)) + 1
+    project["story_contract"] = {
+        "status": "LOCKED",
+        "version": version,
+        "anchor_beats": normalized,
+        "locked_by": actor,
+        "locked_at": utc_now(),
+    }
+    project["updated_at"] = utc_now()
+    atomic_write_json(path, project)
+    append_history(root, "story_contract_locked", actor, "project", "PROJECT_001", {"version": version, "anchor_ids": sorted(seen)})
+    sync_dashboard(root)
+
+
+def record_boundary_analysis(
+    root: str | Path,
+    shot_id: str,
+    frame_path: str,
+    observations: dict[str, Any],
+    technical: dict[str, Any],
+    next_story_adjustment: str,
+    actor: str,
+) -> None:
+    path = data_dir(root) / "shots.json"
+    shots = read_json(path)
+    shot = _find(shots.get("items", []), shot_id, "shot")
+    if shot.get("generation", {}).get("status") not in {"GENERATED", "FINAL_COMPLETE"}:
+        raise StateError("boundary analysis requires an accepted generated shot")
+    if shot.get("qc", {}).get("user_review") != "PASSED":
+        raise StateError("boundary analysis requires explicit user acceptance")
+    if not frame_path:
+        raise StateError("boundary analysis requires the selected frame path")
+    resolved_frame = Path(frame_path).expanduser()
+    if not resolved_frame.is_absolute():
+        resolved_frame = _root(root) / resolved_frame
+    if not resolved_frame.is_file():
+        raise StateError(f"boundary analysis frame does not exist: {resolved_frame}")
+    missing = [key for key in BOUNDARY_OBSERVATION_FIELDS if not isinstance(observations.get(key), str) or not observations[key].strip()]
+    if missing:
+        raise StateError("boundary analysis observations missing: " + ", ".join(missing))
+    if technical.get("selection_method") != "lowest_ffmpeg_blurdetect_mean":
+        raise StateError("boundary analysis must use lowest_ffmpeg_blurdetect_mean selection evidence")
+    try:
+        window_seconds = float(technical.get("window_seconds", 0) or 0)
+        selected_timestamp = float(technical["selected_timestamp"])
+        selected_blur_score = float(technical["selected_blur_score"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise StateError("boundary analysis has invalid timestamp or blur-score evidence") from exc
+    if window_seconds != 0.5:
+        raise StateError("boundary analysis must cover the final 0.5 seconds")
+    candidates = technical.get("candidates")
+    if not isinstance(candidates, list) or len(candidates) < 2:
+        raise StateError("boundary analysis requires the scored candidate ledger")
+    scored_candidates: list[tuple[float, float]] = []
+    try:
+        for candidate in candidates:
+            if not isinstance(candidate, dict):
+                raise TypeError
+            scored_candidates.append((float(candidate["timestamp"]), float(candidate["blur_score"])))
+    except (KeyError, TypeError, ValueError) as exc:
+        raise StateError("boundary analysis candidate ledger is invalid") from exc
+    expected_timestamp, expected_score = min(scored_candidates, key=lambda item: (item[1], -item[0]))
+    if selected_timestamp != expected_timestamp or selected_blur_score != expected_score:
+        raise StateError("boundary analysis selection does not match the lowest-blur candidate")
+    if not isinstance(next_story_adjustment, str) or not next_story_adjustment.strip():
+        raise StateError("boundary analysis requires a next-story adjustment")
+    analysis_id = f"BA_{shot_id}_V{shot.get('generation', {}).get('version', 1)}"
+    shot["boundary_analysis"] = {
+        "status": "COMPLETE",
+        "analysis_id": analysis_id,
+        "frame_path": frame_path,
+        "observations": {key: observations[key].strip() for key in BOUNDARY_OBSERVATION_FIELDS},
+        "technical": {
+            "selection_method": technical["selection_method"],
+            "window_seconds": 0.5,
+            "selected_timestamp": selected_timestamp,
+            "selected_blur_score": selected_blur_score,
+            "candidates": deepcopy(candidates),
+        },
+        "next_story_adjustment": next_story_adjustment.strip(),
+        "analyzed_by": actor,
+        "analyzed_at": utc_now(),
+    }
+    shot["updated_at"] = utc_now()
+    shots["updated_at"] = utc_now()
+    atomic_write_json(path, shots)
+    append_history(root, "boundary_analysis_recorded", actor, "shot", shot_id, {"analysis_id": analysis_id, "frame_path": frame_path})
+    sync_dashboard(root)
+
+
+def record_start_frame_qc(
+    root: str | Path,
+    shot_id: str,
+    rendered_first_frame_path: str,
+    status: str,
+    actor: str,
+    notes: str = "",
+) -> None:
+    if status not in {"PASSED", "FAILED"}:
+        raise StateError("start-frame QC status must be PASSED or FAILED")
+    path = data_dir(root) / "shots.json"
+    shots = read_json(path)
+    shot = _find(shots.get("items", []), shot_id, "shot")
+    if shot.get("generation", {}).get("status") not in {"GENERATED", "FINAL_COMPLETE"}:
+        raise StateError("start-frame QC requires a generated shot")
+    submitted = (shot.get("references") or {}).get("start")
+    if not submitted or not rendered_first_frame_path:
+        raise StateError("start-frame QC requires submitted and rendered first-frame paths")
+    resolved_rendered = Path(rendered_first_frame_path).expanduser()
+    if not resolved_rendered.is_absolute():
+        resolved_rendered = _root(root) / resolved_rendered
+    if not resolved_rendered.is_file():
+        raise StateError(f"rendered first frame does not exist: {resolved_rendered}")
+    shot["start_frame_qc"] = {
+        "status": status,
+        "submitted_start_path": submitted,
+        "rendered_first_frame_path": rendered_first_frame_path,
+        "reviewed_by": actor,
+        "reviewed_at": utc_now(),
+        "notes": notes,
+    }
+    shot["updated_at"] = utc_now()
+    shots["updated_at"] = utc_now()
+    atomic_write_json(path, shots)
+    append_history(root, "start_frame_qc_recorded", actor, "shot", shot_id, {"status": status})
+    sync_dashboard(root)
+
+
+def set_adaptive_story(
+    root: str | Path,
+    shot_id: str,
+    anchor_beat_ids: list[str],
+    adjustment_reason: str,
+    dialogue_impact: str,
+    actor: str,
+    previous_shot_id: str | None = None,
+) -> None:
+    state = load_all(root)
+    contract = state["project"].get("story_contract") or {}
+    if contract.get("status") != "LOCKED":
+        raise StateError("story anchor beats must be user-locked before adaptive planning")
+    valid_ids = {item.get("id") for item in contract.get("anchor_beats", [])}
+    if not isinstance(anchor_beat_ids, list) or not all(isinstance(item, str) for item in anchor_beat_ids):
+        raise StateError("anchor_beat_ids must be a JSON array of strings")
+    unknown = sorted(set(anchor_beat_ids) - valid_ids)
+    if unknown:
+        raise StateError("unknown story anchor beats: " + ", ".join(unknown))
+    if dialogue_impact not in DIALOGUE_IMPACTS:
+        raise StateError("invalid dialogue impact")
+    if not adjustment_reason.strip():
+        raise StateError("adaptive story requires an adjustment reason")
+    shot = _find(state["shots"].get("items", []), shot_id, "shot")
+    analysis_id = None
+    if previous_shot_id:
+        previous = _find(state["shots"].get("items", []), previous_shot_id, "previous shot")
+        if previous.get("generation", {}).get("status") not in {"GENERATED", "FINAL_COMPLETE"}:
+            raise StateError("adaptive story requires the previous generated shot")
+        if previous.get("qc", {}).get("user_review") != "PASSED":
+            raise StateError("adaptive story requires previous user acceptance")
+        if (previous.get("start_frame_qc") or {}).get("status") != "PASSED":
+            raise StateError("adaptive story requires previous start-frame QC")
+        analysis = previous.get("boundary_analysis") or {}
+        if analysis.get("status") != "COMPLETE":
+            raise StateError("adaptive story requires the previous boundary analysis")
+        analysis_id = analysis.get("analysis_id")
+    audio = shot.get("audio") or {}
+    master_hash = (
+        audio.get("dialogue_master_sha256")
+        if audio.get("route") == "VISIBLE_DIALOGUE_ELEVENLABS_V3"
+        else audio.get("narration_master_sha256") if audio.get("route") == "OFFSCREEN_NARRATION" else None
+    )
+    if audio.get("route") in {"VISIBLE_DIALOGUE_ELEVENLABS_V3", "OFFSCREEN_NARRATION"}:
+        if dialogue_impact not in {"UNCHANGED", "RERECORDED"}:
+            raise StateError("recorded-speech adaptation must declare UNCHANGED or RERECORDED")
+        if not isinstance(master_hash, str) or not SHA256_RE.fullmatch(master_hash):
+            raise StateError("recorded-speech adaptation requires a locked master SHA-256")
+    elif dialogue_impact != "NOT_APPLICABLE":
+        raise StateError("shots without visible dialogue must use dialogue_impact=NOT_APPLICABLE")
+    current_revision = int((shot.get("story") or {}).get("adaptive_revision", 0))
+    update_shot(
+        root,
+        shot_id,
+        {
+            "story": {
+                "anchor_beat_ids": list(dict.fromkeys(anchor_beat_ids)),
+                "story_contract_version": contract.get("version"),
+                "adaptive_revision": current_revision + 1,
+                "based_on_previous_shot_id": previous_shot_id,
+                "based_on_boundary_analysis_id": analysis_id,
+                "adjustment_reason": adjustment_reason.strip(),
+                "dialogue_impact": dialogue_impact,
+                "dialogue_master_sha256": master_hash,
+                "recorded_audio_sha256": master_hash,
+            }
         },
         actor,
     )
@@ -1070,6 +1397,14 @@ def audio_plan_errors(shot: dict[str, Any]) -> list[str]:
         errors.append("intentional silence must use audio_mode=none")
     if route == "OFFSCREEN_NARRATION" and audio.get("has_visible_dialogue") is not False:
         errors.append("off-screen narration must declare has_visible_dialogue=false")
+    if route == "OFFSCREEN_NARRATION":
+        if not audio.get("narration_master_path"):
+            errors.append("off-screen narration is missing its locked narration master")
+        narration_hash = audio.get("narration_master_sha256")
+        if not isinstance(narration_hash, str) or not SHA256_RE.fullmatch(narration_hash):
+            errors.append("off-screen narration master must be locked with a SHA-256 fingerprint")
+        if audio.get("final_mix_required") is not True:
+            errors.append("off-screen narration must require a final external mix")
     if route == "VISIBLE_DIALOGUE_ELEVENLABS_V3":
         if audio_mode != "audio_reference":
             errors.append("visible dialogue must use the locked ElevenLabs master as audio_reference")
@@ -1080,10 +1415,97 @@ def audio_plan_errors(shot: dict[str, Any]) -> list[str]:
             errors.append("visible dialogue is missing the locked dialogue master")
         elif master not in (shot.get("references") or {}).get("audios", []):
             errors.append("dialogue master must be present in audio_references")
+        master_hash = audio.get("dialogue_master_sha256")
+        if not isinstance(master_hash, str) or not SHA256_RE.fullmatch(master_hash):
+            errors.append("visible dialogue master must be locked with a SHA-256 fingerprint")
         if audio.get("discard_generated_track") is not True:
             errors.append("visible dialogue must discard the Seedance-rendered audio track")
         if audio.get("final_mix_required") is not True:
             errors.append("visible dialogue must require a final external mix")
+    return errors
+
+
+def ordered_shots(state: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+    scene_order = {
+        item.get("id"): (item.get("order", 0), item.get("id", ""))
+        for item in state["scenes"].get("items", [])
+    }
+    return sorted(
+        state["shots"].get("items", []),
+        key=lambda item: (*scene_order.get(item.get("scene_id"), (0, item.get("scene_id", ""))), item.get("order", 0), item.get("id", "")),
+    )
+
+
+def story_contract_errors(state: dict[str, dict[str, Any]], shot: dict[str, Any]) -> list[str]:
+    contract = state["project"].get("story_contract") or {}
+    if contract.get("status") != "LOCKED":
+        return ["story anchor beats are not user-locked"]
+    errors: list[str] = []
+    story = shot.get("story") or {}
+    valid_ids = {item.get("id") for item in contract.get("anchor_beats", [])}
+    unknown = sorted(set(story.get("anchor_beat_ids") or []) - valid_ids)
+    if unknown:
+        errors.append("shot references unknown anchor beats: " + ", ".join(unknown))
+    if story.get("story_contract_version") != contract.get("version"):
+        errors.append("shot adaptive plan does not use the current locked story contract")
+    if not story.get("adjustment_reason"):
+        errors.append("shot adaptive plan has no adjustment reason")
+    audio = shot.get("audio") or {}
+    if audio.get("route") in {"VISIBLE_DIALOGUE_ELEVENLABS_V3", "OFFSCREEN_NARRATION"}:
+        expected_hash = (
+            audio.get("dialogue_master_sha256")
+            if audio.get("route") == "VISIBLE_DIALOGUE_ELEVENLABS_V3"
+            else audio.get("narration_master_sha256")
+        )
+        if story.get("recorded_audio_sha256") != expected_hash:
+            errors.append("adaptive plan does not preserve the locked recorded-audio fingerprint")
+        if story.get("dialogue_impact") not in {"UNCHANGED", "RERECORDED"}:
+            errors.append("adaptive plan must declare recorded-speech impact")
+    return errors
+
+
+def sequential_adaptation_errors(state: dict[str, dict[str, Any]], shot: dict[str, Any]) -> list[str]:
+    sequence = ordered_shots(state)
+    index = next((offset for offset, item in enumerate(sequence) if item.get("id") == shot.get("id")), None)
+    if index is None:
+        return ["shot is absent from the ordered production sequence"]
+    story = shot.get("story") or {}
+    provenance = (shot.get("boundary") or {}).get("start_image_provenance") or {}
+    if index == 0:
+        errors: list[str] = []
+        if story.get("based_on_previous_shot_id") is not None:
+            errors.append("first shot adaptive plan must not depend on a previous shot")
+        if provenance.get("mode") != "initial_composition":
+            errors.append("first shot must use the sole initial composed start image")
+        if not provenance.get("created_at"):
+            errors.append("first shot start image has no composition timestamp")
+        return errors
+    previous = sequence[index - 1]
+    previous_id = previous.get("id")
+    errors = []
+    if previous.get("generation", {}).get("status") not in {"GENERATED", "FINAL_COMPLETE"}:
+        errors.append("previous sequential shot has not been generated and accepted")
+    if previous.get("qc", {}).get("user_review") != "PASSED":
+        errors.append("previous sequential shot lacks user acceptance")
+    previous_analysis = previous.get("boundary_analysis") or {}
+    if previous_analysis.get("status") != "COMPLETE":
+        errors.append("previous sequential shot lacks boundary analysis")
+    if (previous.get("start_frame_qc") or {}).get("status") != "PASSED":
+        errors.append("previous sequential shot lacks passed start-frame QC")
+    if story.get("based_on_previous_shot_id") != previous_id:
+        errors.append("adaptive plan is not based on the immediate previous shot")
+    if story.get("based_on_boundary_analysis_id") != previous_analysis.get("analysis_id"):
+        errors.append("adaptive plan is not bound to the previous boundary analysis")
+    if provenance.get("created_after_shot_id") != previous_id:
+        errors.append("next start image was not created or inherited just in time after the previous shot")
+    if not provenance.get("created_at"):
+        errors.append("next start image has no JIT provenance timestamp")
+    strategy = (shot.get("boundary") or {}).get("strategy")
+    if strategy in {"continuous_match", "motivated_transition"}:
+        if (shot.get("references") or {}).get("start") != previous_analysis.get("frame_path"):
+            errors.append("chained start image must equal the accepted previous boundary analysis frame")
+    elif provenance.get("mode") != "jit_composition":
+        errors.append("cut/reset after the first shot must use a just-in-time composed start image")
     return errors
 
 
@@ -1107,6 +1529,8 @@ def shot_gate_errors(state: dict[str, dict[str, Any]], shot: dict[str, Any]) -> 
     errors.extend(boundary_plan_errors(shot))
     errors.extend(start_image_policy_errors(shot))
     errors.extend(audio_plan_errors(shot))
+    errors.extend(story_contract_errors(state, shot))
+    errors.extend(sequential_adaptation_errors(state, shot))
     binding = shot.get("shot_grammar", {}).get("provider_binding", {})
     if binding.get("provider") in {"seedance_2_0", "seedance_2_0_mini"}:
         plan = shot.get("seedance_plan") or {}
@@ -1137,6 +1561,10 @@ def transition_generation(root: str | Path, shot_id: str, target: str, actor: st
         if gates:
             raise StateError("generation gate failed: " + "; ".join(gates))
     if target == "FINAL_COMPLETE":
+        if (shot.get("start_frame_qc") or {}).get("status") != "PASSED":
+            raise StateError("final gate failed; start-frame QC is not passed")
+        if (shot.get("boundary_analysis") or {}).get("status") != "COMPLETE":
+            raise StateError("final gate failed; boundary analysis is incomplete")
         required_qc = ("technical", "transcript", "lip_sync", "visual", "continuity", "cinematography", "user_review")
         bad = [key for key in required_qc if shot.get("qc", {}).get(key) not in {"PASSED", "NOT_APPLICABLE"}]
         if bad:

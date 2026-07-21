@@ -81,13 +81,17 @@ class CinematographyTests(unittest.TestCase):
         compiled = cine.compile_prompt(
             grammar, provider="seedance_2_0", subject="the protagonist", setting="an empty office",
             action="recognizes the betrayal", exit_state="eyes locked on the evidence",
-            invariants=["same identity", "same screen direction"],
+            invariants=["same identity", "same screen direction", "same wardrobe", "ignore this fourth invariant"],
             live_schema=seedance_snapshot(),
+            references={"start": "start.png"}, boundary_strategy="scene_reset",
         )
         self.assertIn("End state:", compiled["prompt"])
         self.assertTrue(compiled["prompt"].startswith("1 shot / 5s / auto / single continuous shot"))
         self.assertFalse(compiled["native_params"]["generate_audio"])
         self.assertEqual(compiled["native_params"]["resolution"], "720p")
+        self.assertIn("Begin exactly on the provided start image framing", compiled["prompt"])
+        self.assertIn("Critical invariants: same identity; same screen direction; same wardrobe", compiled["prompt"])
+        self.assertNotIn("ignore this fourth invariant", compiled["prompt"])
         applied = cine.apply_compilation(grammar, compiled)
         self.assertEqual(applied["status"], "VALIDATED")
         self.assertFalse(cine.validate_grammar(applied, require_complete=True, shot_duration=5)[0])

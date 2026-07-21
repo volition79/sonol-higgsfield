@@ -24,6 +24,8 @@ primary camera movement per shot. Produce one to three intent-first grammar
 recommendations, record the selected `shot_grammar` and rationale, compile it
 for the live provider contract, and require full grammar validation. Record
 planned edit points and one of the four incoming boundary strategies.
+The user must also lock a versioned, non-empty `story_contract.anchor_beats`
+list before paid generation.
 
 ### C. Credit ceiling
 
@@ -59,9 +61,10 @@ Store the approved provider call and its generated fingerprint as
 Generate one dependent shot at a time. Record the exact job ID, arguments,
 model contract snapshot, result path, and actual credits. Inspect before the
 next shot that depends on its end state: compare the rendered first frame to
-the submitted start image, extract the sharpest boundary frame from the final
-half second, analyze it, and re-align the next shot's plan to it before
-compiling.
+the submitted start image, score eight boundary candidates from the final half
+second, record the selected frame and semantic observations, and bind the next
+shot to that analysis before compiling. Schema v5 blocks out-of-order dependent
+generation and stale or pre-produced cut/reset start images.
 
 ### G. QC and finish
 

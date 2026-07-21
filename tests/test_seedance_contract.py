@@ -33,6 +33,8 @@ class SeedanceContractTests(unittest.TestCase):
             "action": "finds a hidden note",
             "exit_state": "holds the note at chest height",
             "live_schema": seedance_snapshot(),
+            "references": {"start": "start.png"},
+            "boundary_strategy": "scene_reset",
         }
         values.update(kwargs)
         grammar = values.pop("grammar")
@@ -54,26 +56,30 @@ class SeedanceContractTests(unittest.TestCase):
         self.assertFalse(self.compile()["native_params"]["generate_audio"])
         for mode in ("native_sfx", "native_dialogue", "audio_reference"):
             with self.subTest(mode=mode):
-                references = None
+                references = {"start": "start.png"}
                 if mode == "audio_reference":
-                    references = {"images": ["hero.png"], "audios": ["voice.wav"]}
+                    references = {"start": "start.png", "audios": ["voice.wav"]}
                 compiled = self.compile(seedance_plan={"audio_mode": mode}, references=references)
                 self.assertTrue(compiled["native_params"]["generate_audio"])
         self.assertFalse(self.compile(seedance_plan={"audio_mode": "post_only"})["native_params"]["generate_audio"])
 
-    def test_all_live_reference_boundaries_are_enforced(self) -> None:
+    def test_single_start_image_and_live_reference_boundaries_are_enforced(self) -> None:
         bad_cases = [
-            ({"images": list(range(10))}, "image references"),
-            ({"videos": list(range(4))}, "video references"),
-            ({"images": [1], "audios": list(range(4))}, "audio references"),
-            ({"images": list(range(8)), "videos": [1, 2, 3], "audios": [1, 2]}, "total references"),
-            ({"audios": ["voice.wav"]}, "at least one visual"),
+            ({"start": "start.png", "images": ["hero.png"]}, "must not carry image references"),
+            ({"start": "start.png", "videos": list(range(4))}, "video references"),
+            ({"start": "start.png", "audios": list(range(4))}, "audio references"),
+            ({"audios": ["voice.wav"]}, "requires start_image"),
         ]
         for references, message in bad_cases:
             with self.subTest(message=message), self.assertRaisesRegex(cine.CinematographyError, message):
                 self.compile(seedance_plan={"audio_mode": "audio_reference"}, references=references)
-        with self.assertRaisesRegex(cine.CinematographyError, "including start/end"):
-            self.compile(references={"start": "a", "end": "b", "images": list(range(8))})
+        with self.assertRaisesRegex(cine.CinematographyError, "motivated_transition"):
+            self.compile(references={"start": "a", "end": "b"})
+        motivated = self.compile(
+            references={"start": "a", "end": "b"},
+            boundary_strategy="motivated_transition",
+        )
+        self.assertEqual(motivated["native_params"]["end_image"], "b")
         with self.assertRaisesRegex(cine.CinematographyError, "at most 720p"):
             self.compile(seedance_plan={"generation_mode": "fast", "resolution": "1080p"})
 
@@ -105,10 +111,11 @@ class SeedanceContractTests(unittest.TestCase):
 
     def test_reference_manifest_preserves_semantic_roles_without_alias_invention(self) -> None:
         references = {
+            "start": "hero.png",
             "manifest": [
                 {
                     "semantic_role": "character",
-                    "transport_field": "image_references",
+                    "transport_field": "start_image",
                     "source": "hero.png",
                     "controls": ["identity", "wardrobe"],
                     "prompt_alias": None,
@@ -116,8 +123,12 @@ class SeedanceContractTests(unittest.TestCase):
             ]
         }
         compiled = self.compile(references=references)
-        self.assertEqual(compiled["native_params"]["image_references"], ["hero.png"])
+        self.assertEqual(compiled["native_params"]["start_image"], "hero.png")
         self.assertNotIn("@character", compiled["prompt"])
+        forbidden = deepcopy(references)
+        forbidden["manifest"][0]["transport_field"] = "image_references"
+        with self.assertRaisesRegex(cine.CinematographyError, "must not carry image references"):
+            self.compile(references=forbidden)
         invalid = deepcopy(references)
         invalid["manifest"][0]["prompt_alias"] = "@character"
         with self.assertRaisesRegex(cine.CinematographyError, "aliases are not exposed"):
