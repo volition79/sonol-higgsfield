@@ -1,6 +1,6 @@
 ---
 name: sonol-higgsfield
-description: Route and orchestrate Higgsfield video work from quick clips and native Seedance multi-shot sequences to approval-gated serial productions, with minimum-sufficient prompts, ElevenLabs V3-conditioned native dialogue audio, adaptive continuity, QC, recovery, and a persistent dashboard. Use for multi-job films, stories, campaigns, or controlled shots needing reusable characters, selective regeneration, provider recovery, or production state; route ads and explainers to Higgsfield's official dedicated workflows first.
+description: Route and orchestrate Higgsfield video work across Cinema Studio 3.5, Seedance, quick clips, and approval-gated serial productions, with native directing axes, minimum-sufficient prompts, ElevenLabs V3-conditioned dialogue, adaptive continuity, QC, recovery, and a persistent dashboard. Use for films, stories, campaigns, or controlled shots needing expressive camera direction, reusable characters, selective regeneration, provider recovery, or production state; route ads and explainers to Higgsfield's official dedicated workflows first.
 ---
 
 # Sonol Higgsfield
@@ -49,10 +49,13 @@ Read [director-intelligence.md](references/director-intelligence.md) and run
   `higgsfield-video-explainer` for explainers. Add Sonol only for optional audit
   or downstream QC, not as the default owner.
 
-Set `LIGHT`, `TARGETED`, or `FULL` approval depth. Reserve `FULL` for high-cost,
-multi-job, or long projects. If a managed production is needed, persist the
+Set `LIGHT`, `TARGETED`, or `FULL` approval depth. Reserve `FULL` for high-cost, multi-job, or long projects. If a managed production is needed, persist the
 choice with `set-production-policy`. Do not initialize a dashboard merely to
 make a quick official generation.
+
+Route the provider per shot using
+[cinema-studio-3-5-production.md](references/cinema-studio-3-5-production.md).
+Leave a balanced Seedance/Cinema tie unresolved for a representative A/B.
 
 ## Initialize A Managed Production
 
@@ -153,22 +156,13 @@ passes. Default to one primary camera movement. Treat `native_structured`,
 `unsupported` as distinct claims. A web preset or remembered MCP feature is not
 a CLI-native field.
 
-For every `FULL` serial shot, record the prior context, current goal, emotion, visual state,
-action, camera state, audio state, next-shot setup, reference package,
-generation parameters, expected splice points, and one director-approved
-boundary strategy when the chosen mode needs one. Choose `continuous_match`, `motivated_transition`,
-`editorial_cut`, or `scene_reset`; never inherit a previous frame merely because
-one exists.
+For each `FULL` serial shot, record context, goal, continuity, references,
+generation parameters, splice points, and one approved boundary strategy.
+Never inherit a previous frame merely because one exists.
 
-Before board approval, use the five advisory commands in
-`director_intelligence.py`: complexity for every planned managed shot; prompt
-lint before paid compilation; performance only for visible emotion-critical
-acting; camera only when a director choice is unresolved; and failure diagnosis
-after rejected attempts. Performance selects at most three visible physical
-cues. Camera returns at most two alternatives and never auto-selects. A
-`SPLIT_REQUIRED` result proposes a split but cannot change duration, shot count,
-or cost without approval. The linter preserves meaning and uses a target range,
-not a hard short-prompt limit.
+Before board approval, use the five advisory commands described in
+[director-intelligence.md](references/director-intelligence.md). They never
+auto-select a camera, split a shot, change cost, or replace approved meaning.
 
 ### 4. Discover the live model contract and approve the budget ceiling
 
@@ -234,8 +228,10 @@ an asset that is not `LOCKED_FOR_VIDEO`.
 
 ### 6. Generate with the routed unit of work
 
-Prefer Seedance 2.0 for serious general video. Respect the live reference and
-duration limits.
+Use the routed provider, not a universal default. Cinema 3.5 executes as CLI
+mode `model` through `generate create`; bind its broad style/light/grade/genre
+fields natively and keep exact moves and lens claims prompt-soft. Respect the
+selected live contract's reference and duration limits.
 
 Apply the minimum-sufficient image contract, enforced by the generation gate:
 
@@ -264,6 +260,8 @@ not gates. Remove static re-description already supplied by the start image and
 long invariant lists, but never delete meaning only to hit a number.
 The compiler enforces the selected image-input profile, rejects an `end_image`
 outside `motivated_transition`, and emits at most three critical invariants.
+For image-to-video, default to `match_then_release`; preserve the initial
+composition only when composition stability is load-bearing.
 
 Submit without provider waiting only after the guarded runner has re-fetched
 the selected contract, confirmed remaining project-ceiling capacity, and
@@ -392,7 +390,7 @@ the decision with `set-boundary`. Record preparation with
 Semantic pose, gaze, hands, props, framing, lighting, and emotion remain a
 director judgment, not an automatic score.
 
-Schema v9 blocks paid managed generation until the start image passes
+Schema v10 blocks paid managed generation until the start image passes
 preparation review. `FULL` serial production also requires the locked story and
 adaptive plan. A cut/reset needs the previous shot accepted and a just-in-time
 start provenance, but does not require boundary analysis. An inherited chain
@@ -459,6 +457,8 @@ shots, QC gaps, and any manual checks still required.
   generation into one shot.
 - Never insert web `@character`, `@style`, `@motion`, or `@audio` aliases into a CLI prompt unless the live CLI schema explicitly exposes alias binding.
 - Never let Seedance inherit its current `generate_audio=true` default; compile an explicit shot audio route.
+- Never equate Cinema 3.5 dialogue references with the proven Seedance V3 route
+  without an approved pronunciation/lip-sync A/B.
 - Never queue native audio without a complete compact sound brief covering
   dialogue state, ambience, synchronized effects, music state, and exclusions.
 - Never discard or creatively overdub an accepted native production track

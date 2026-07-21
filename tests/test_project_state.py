@@ -211,6 +211,11 @@ class ProductionStateTests(unittest.TestCase):
         for name in state.DATA_FILES:
             self.assertTrue((self.production / "data" / name).is_file())
         self.assertTrue((self.production / "dashboard" / "project-data.js").is_file())
+        state.add_scene(self.production, "SCENE_C35", "Cinema route", 1)
+        state.add_shot(self.production, "SHOT_C35", "SCENE_C35", "Expressive move", 1)
+        shot = state.read_json(state.data_dir(self.production) / "shots.json")["items"][0]
+        self.assertEqual(shot["cinema35_plan"]["start_frame_behavior"], "match_then_release")
+        self.assertEqual(shot["cinema35_plan"]["audio_mode"], "none")
 
     def test_requirements_require_user_and_all_confirmed(self) -> None:
         with self.assertRaisesRegex(state.StateError, "only the user"):
@@ -691,12 +696,17 @@ class ProductionStateTests(unittest.TestCase):
 
     def test_provider_job_id_accepts_only_known_envelopes(self) -> None:
         # The live hf CLI returns job objects (or a list of them) whose
-        # identifier key is a plain "id"; non-dict payloads are rejected.
+        # identifier key is a plain "id". Some releases instead return a
+        # one-item UUID array, which is accepted without opening parsing to
+        # arbitrary string payloads.
+        job_uuid = "1f5cc4f1-98bd-42de-92dd-27a9f704cc53"
         self.assertEqual(run_shot.provider_job_id({"id": "job-001"}), "job-001")
         self.assertEqual(run_shot.provider_job_id([{"id": "job-001"}]), "job-001")
         self.assertEqual(run_shot.provider_job_id({"data": {"job_id": "job-001"}}), "job-001")
+        self.assertEqual(run_shot.provider_job_id([job_uuid]), job_uuid)
         self.assertIsNone(run_shot.provider_job_id("job-001"))
         self.assertIsNone(run_shot.provider_job_id(["job-001"]))
+        self.assertIsNone(run_shot.provider_job_id([job_uuid, {"id": "job-002"}]))
         self.assertIsNone(run_shot.provider_job_id({"credits": 5}))
 
     def test_provider_status_incident_fixture_is_fail_open_for_unknown_states(self) -> None:
@@ -1135,6 +1145,22 @@ class ProductionStateTests(unittest.TestCase):
             state.SCHEMA_VERSION,
         )
         self.assertFalse(state.validate(self.production))
+
+    def test_explicit_v9_migration_adds_cinema35_plan(self) -> None:
+        state.add_scene(self.production, "SCENE_OLD", "Old", 1)
+        state.add_shot(self.production, "SHOT_OLD", "SCENE_OLD", "Old shot", 1)
+        for name in state.DATA_FILES:
+            path = state.data_dir(self.production) / name
+            document = state.read_json(path)
+            document["schema_version"] = 9
+            if name == "shots.json":
+                document["items"][0].pop("cinema35_plan", None)
+            state.atomic_write_json(path, document, backup=False)
+        result = state.migrate(self.production)
+        self.assertEqual(result["schema_version"], state.SCHEMA_VERSION)
+        shot = state.read_json(state.data_dir(self.production) / "shots.json")["items"][0]
+        self.assertEqual(shot["cinema35_plan"]["camera_style"], None)
+        self.assertEqual(shot["cinema35_plan"]["start_frame_behavior"], "match_then_release")
 
     def test_explicit_v5_migration_converts_visible_dialogue_to_native_audio(self) -> None:
         state.add_scene(self.production, "SCENE_001", "Opening", 1)

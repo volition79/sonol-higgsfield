@@ -19,6 +19,63 @@ class DirectorIntelligenceError(ValueError):
     pass
 
 
+CINEMA35_PROVIDER = "cinematic_studio_video_3_5"
+
+
+def route_provider(
+    *, visual_priority: str = "balanced", camera_load_bearing: bool = False,
+    look_load_bearing: bool = False, continuity: bool = False,
+    exact_dialogue: bool = False, precise_performance: bool = False,
+    exact_object_interaction: bool = False, native_multishot: bool = False,
+) -> dict[str, Any]:
+    """Recommend a provider without pretending one model wins every shot."""
+    priority = visual_priority.strip().lower()
+    if priority not in {"stability", "balanced", "expressive"}:
+        raise DirectorIntelligenceError(
+            "visual_priority must be stability, balanced, or expressive"
+        )
+    seedance_reasons: list[str] = []
+    cinema_reasons: list[str] = []
+    if native_multishot:
+        seedance_reasons.append("native timecoded multi-shot is requested")
+    if continuity:
+        seedance_reasons.append("cross-shot continuity is load-bearing")
+    if exact_dialogue:
+        seedance_reasons.append("visible dialogue uses the proven V3-conditioned Seedance route")
+    if precise_performance:
+        seedance_reasons.append("precise acting benefits from the controlled Seedance route")
+    if exact_object_interaction:
+        seedance_reasons.append("fragile object interaction favors the stability-first route")
+    if priority == "stability":
+        seedance_reasons.append("stability is the declared visual priority")
+    if priority == "expressive":
+        cinema_reasons.append("expressive cinematography is the declared visual priority")
+    if camera_load_bearing:
+        cinema_reasons.append("camera character is load-bearing")
+    if look_load_bearing:
+        cinema_reasons.append("genre, light, or grade is load-bearing")
+
+    if seedance_reasons:
+        preferred = "seedance_2_0"
+        confidence = "HIGH" if exact_dialogue or native_multishot else "MEDIUM"
+    elif cinema_reasons:
+        preferred = CINEMA35_PROVIDER
+        confidence = "HIGH" if len(cinema_reasons) >= 2 else "MEDIUM"
+    else:
+        preferred = None
+        confidence = "LOW"
+    return {
+        "preferred_provider": preferred,
+        "preferred_execution_mode": "model" if preferred else None,
+        "selection_required": preferred is None,
+        "confidence": confidence,
+        "candidates": ["seedance_2_0", CINEMA35_PROVIDER],
+        "seedance_reasons": seedance_reasons,
+        "cinema35_reasons": cinema_reasons,
+        "rule": "route per shot; confirm against the fresh live contract and a representative A/B",
+    }
+
+
 def _load(name: str) -> dict[str, Any]:
     return json.loads((REFERENCES / name).read_text(encoding="utf-8"))
 
@@ -27,22 +84,43 @@ def route_production(
     *, intent_type: str, duration_seconds: float, planned_jobs: int, simple_beats: int = 1,
     high_cost: bool = False, continuity: bool = False, exact_dialogue: bool = False,
     precise_performance: bool = False, exact_object_interaction: bool = False,
+    visual_priority: str = "balanced", camera_load_bearing: bool = False,
+    look_load_bearing: bool = False,
 ) -> dict[str, Any]:
     intent = intent_type.strip().lower().replace("-", "_")
     if intent in {"ad", "advertisement", "marketing", "ugc_ad"}:
-        return {"mode": "OFFICIAL_WORKFLOW", "approval_profile": "LIGHT", "official_workflow": "marketing_studio", "managed_state": False, "reason": "official ad workflow is purpose-built"}
+        return {"mode": "OFFICIAL_WORKFLOW", "approval_profile": "LIGHT", "official_workflow": "marketing_studio", "managed_state": False, "provider_strategy": None, "reason": "official ad workflow is purpose-built"}
     if intent in {"explainer", "video_explainer", "narrated_explainer"}:
-        return {"mode": "OFFICIAL_WORKFLOW", "approval_profile": "LIGHT", "official_workflow": "video_explainer", "managed_state": False, "reason": "official explainer workflow is purpose-built"}
+        return {"mode": "OFFICIAL_WORKFLOW", "approval_profile": "LIGHT", "official_workflow": "video_explainer", "managed_state": False, "provider_strategy": None, "reason": "official explainer workflow is purpose-built"}
+    native_multishot = (
+        2 <= simple_beats <= 4
+        and duration_seconds <= 15
+        and visual_priority != "expressive"
+        and not camera_load_bearing
+        and not look_load_bearing
+    )
+    provider_strategy = route_provider(
+        visual_priority=visual_priority,
+        camera_load_bearing=camera_load_bearing,
+        look_load_bearing=look_load_bearing,
+        continuity=continuity,
+        exact_dialogue=exact_dialogue,
+        precise_performance=precise_performance,
+        exact_object_interaction=exact_object_interaction,
+        native_multishot=native_multishot and not (
+            exact_dialogue or precise_performance or exact_object_interaction
+        ),
+    )
     if duration_seconds > 15 or planned_jobs > 1 or continuity:
         profile = "FULL" if high_cost or planned_jobs > 2 or duration_seconds > 30 else "TARGETED"
-        return {"mode": "SERIAL_STORY", "approval_profile": profile, "official_workflow": None, "managed_state": True, "reason": "multiple jobs or continuity require recovery and sequence state"}
+        return {"mode": "SERIAL_STORY", "approval_profile": profile, "official_workflow": None, "managed_state": True, "provider_strategy": provider_strategy, "reason": "multiple jobs or continuity require recovery and sequence state"}
     if high_cost:
-        return {"mode": "CONTROLLED_SHOT", "approval_profile": "FULL", "official_workflow": None, "managed_state": True, "reason": "the high-cost generation needs a full preflight and recovery record"}
+        return {"mode": "CONTROLLED_SHOT", "approval_profile": "FULL", "official_workflow": None, "managed_state": True, "provider_strategy": provider_strategy, "reason": "the high-cost generation needs a full preflight and recovery record"}
     if exact_dialogue or precise_performance or exact_object_interaction:
-        return {"mode": "CONTROLLED_SHOT", "approval_profile": "TARGETED", "official_workflow": None, "managed_state": True, "reason": "a load-bearing detail benefits from one controlled shot"}
-    if 2 <= simple_beats <= 4 and duration_seconds <= 15:
-        return {"mode": "NATIVE_MULTISHOT", "approval_profile": "LIGHT", "official_workflow": None, "managed_state": True, "reason": "simple beats can share one native Seedance generation"}
-    return {"mode": "QUICK_CLIP", "approval_profile": "LIGHT", "official_workflow": None, "managed_state": False, "reason": "a small exploratory clip does not need the full production system"}
+        return {"mode": "CONTROLLED_SHOT", "approval_profile": "TARGETED", "official_workflow": None, "managed_state": True, "provider_strategy": provider_strategy, "reason": "a load-bearing detail benefits from one controlled shot"}
+    if native_multishot:
+        return {"mode": "NATIVE_MULTISHOT", "approval_profile": "LIGHT", "official_workflow": None, "managed_state": True, "provider_strategy": provider_strategy, "reason": "simple beats can share one native Seedance generation"}
+    return {"mode": "QUICK_CLIP", "approval_profile": "LIGHT", "official_workflow": None, "managed_state": False, "provider_strategy": provider_strategy, "reason": "a small exploratory clip does not need the full production system"}
 
 
 def performance_direction(emotion: str, visible_channels: list[str], maximum: int = 3) -> dict[str, Any]:
@@ -59,14 +137,28 @@ def performance_direction(emotion: str, visible_channels: list[str], maximum: in
     return {"status": "ADVISORY", "emotion_intent": key, "visible_channels": visible, "selected_cues": selected, "source": "preset_advisory"}
 
 
-def camera_alternatives(story_function: str) -> dict[str, Any]:
+def camera_alternatives(story_function: str, provider: str | None = None) -> dict[str, Any]:
     strategies = _load("camera-emotion-map.json")["strategies"]
     key = story_function.strip().lower()
     if key not in strategies:
         return {"status": "NEEDS_SELECTION", "story_function": story_function, "alternatives": [], "warning": "no mapping matches; retain the existing director choice"}
+    alternatives: list[dict[str, Any]] = [
+        dict(strategy="follow", **strategies[key]["follow"]),
+        dict(strategy="contrast", **strategies[key]["contrast"]),
+    ]
+    if provider == CINEMA35_PROVIDER:
+        style_hints = {
+            "static": "classic_static", "slow_push_in": "intimate_observer",
+            "slow_pull_out": "intimate_observer", "tracking": "silent_machine",
+            "crane_up": "epic_scale", "crane_down": "epic_scale",
+        }
+        for item in alternatives:
+            item["cinema35_camera_style_hint"] = style_hints.get(item["movement"])
+            item["movement_support"] = "prompt_soft"
+            item["style_family_support"] = "native_structured"
     return {
         "status": "ADVISORY", "story_function": key, "support_level": "prompt_soft",
-        "alternatives": [dict(strategy="follow", **strategies[key]["follow"]), dict(strategy="contrast", **strategies[key]["contrast"])],
+        "alternatives": alternatives,
         "selected_strategy": None,
     }
 
@@ -220,11 +312,12 @@ def parser() -> argparse.ArgumentParser:
     cmd = sub.add_parser("route")
     cmd.add_argument("intent_type"); cmd.add_argument("duration_seconds", type=float); cmd.add_argument("planned_jobs", type=int)
     cmd.add_argument("--simple-beats", type=int, default=1)
-    for flag in ("high_cost", "continuity", "exact_dialogue", "precise_performance", "exact_object_interaction"):
+    for flag in ("high_cost", "continuity", "exact_dialogue", "precise_performance", "exact_object_interaction", "camera_load_bearing", "look_load_bearing"):
         cmd.add_argument("--" + flag.replace("_", "-"), action="store_true")
+    cmd.add_argument("--visual-priority", choices=("stability", "balanced", "expressive"), default="balanced")
     cmd = sub.add_parser("performance")
     cmd.add_argument("emotion"); cmd.add_argument("--visible-channel", action="append", default=[]); cmd.add_argument("--maximum", type=int, default=3)
-    cmd = sub.add_parser("camera"); cmd.add_argument("story_function")
+    cmd = sub.add_parser("camera"); cmd.add_argument("story_function"); cmd.add_argument("--provider")
     cmd = sub.add_parser("lint"); cmd.add_argument("prompt"); cmd.add_argument("--kind", default="simple"); cmd.add_argument("--load-bearing-element")
     cmd = sub.add_parser("refine"); cmd.add_argument("prompt"); cmd.add_argument("--kind", default="simple"); cmd.add_argument("--load-bearing-element"); cmd.add_argument("--static-fact", action="append", default=[])
     cmd = sub.add_parser("complexity")
@@ -239,7 +332,7 @@ def main() -> int:
     args = vars(parser().parse_args()); command = args.pop("command")
     if command == "route": result = route_production(**args)
     elif command == "performance": result = performance_direction(args["emotion"], args["visible_channel"], args["maximum"])
-    elif command == "camera": result = camera_alternatives(args["story_function"])
+    elif command == "camera": result = camera_alternatives(args["story_function"], args["provider"])
     elif command == "lint": result = lint_prompt(args["prompt"], kind=args["kind"], load_bearing_element=args["load_bearing_element"])
     elif command == "refine": result = refine_prompt(args["prompt"], kind=args["kind"], load_bearing_element=args["load_bearing_element"], static_facts=args["static_fact"])
     elif command == "complexity": result = score_complexity(**args)

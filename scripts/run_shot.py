@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -17,6 +18,12 @@ import estimate_costs
 import project_state as state
 import cinematography
 import execution_contract
+
+
+UUID_RE = re.compile(
+    r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
+    r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
+)
 
 
 def find_value(value: Any, keys: set[str]) -> Any:
@@ -39,6 +46,11 @@ def find_value(value: Any, keys: set[str]) -> Any:
 def provider_job_id(value: Any) -> str | None:
     """Accept only explicit job/generation identifiers in known response envelopes."""
     if isinstance(value, list):
+        # Some live CLI releases return a one-element JSON array containing
+        # only the submitted generation UUID. Keep this narrow so arbitrary
+        # strings are never mistaken for a durable provider job identifier.
+        if len(value) == 1 and isinstance(value[0], str) and UUID_RE.fullmatch(value[0]):
+            return value[0]
         value = value[0] if value and isinstance(value[0], dict) else None
     if not isinstance(value, dict):
         return None
@@ -79,7 +91,17 @@ def normalize_provider_status(raw: str | None) -> str:
     value = (raw or "").strip().casefold().replace("-", "_").replace(" ", "_")
     if value in {"completed", "complete", "succeeded", "success", "finished", "done"}:
         return "PROVIDER_COMPLETED"
-    if value in {"failed", "failure", "error", "cancelled", "canceled", "rejected"}:
+    if value in {
+        "failed",
+        "failure",
+        "error",
+        "cancelled",
+        "canceled",
+        "rejected",
+        "nsfw",
+        "moderated",
+        "blocked",
+    }:
         return "FAILED"
     if value in {"running", "processing", "generating", "in_progress", "started"}:
         return "RUNNING"

@@ -21,6 +21,9 @@ class DirectorIntelligenceTests(unittest.TestCase):
             intent_type="film", duration_seconds=8, planned_jobs=1, exact_dialogue=True
         )
         self.assertEqual(precise["mode"], "CONTROLLED_SHOT")
+        self.assertEqual(
+            precise["provider_strategy"]["preferred_provider"], "seedance_2_0"
+        )
         multishot = di.route_production(
             intent_type="film", duration_seconds=12, planned_jobs=1, simple_beats=3
         )
@@ -34,6 +37,22 @@ class DirectorIntelligenceTests(unittest.TestCase):
         )
         self.assertEqual(expensive["approval_profile"], "FULL")
 
+    def test_provider_router_uses_cinema_for_load_bearing_direction_without_forcing_it(self) -> None:
+        expressive = di.route_production(
+            intent_type="film", duration_seconds=8, planned_jobs=1,
+            visual_priority="expressive", camera_load_bearing=True,
+        )
+        strategy = expressive["provider_strategy"]
+        self.assertEqual(strategy["preferred_provider"], "cinematic_studio_video_3_5")
+        self.assertEqual(strategy["confidence"], "HIGH")
+        balanced = di.route_provider()
+        self.assertIsNone(balanced["preferred_provider"])
+        self.assertTrue(balanced["selection_required"])
+        fragile = di.route_provider(
+            visual_priority="expressive", camera_load_bearing=True, exact_dialogue=True
+        )
+        self.assertEqual(fragile["preferred_provider"], "seedance_2_0")
+
     def test_performance_uses_only_visible_channels_and_at_most_three_cues(self) -> None:
         result = di.performance_direction("shock", ["eyes", "face", "breath", "hands"], 9)
         self.assertEqual(result["status"], "ADVISORY")
@@ -45,6 +64,11 @@ class DirectorIntelligenceTests(unittest.TestCase):
         self.assertEqual(len(result["alternatives"]), 2)
         self.assertEqual(result["support_level"], "prompt_soft")
         self.assertIsNone(result["selected_strategy"])
+        cinema = di.camera_alternatives("urgency", "cinematic_studio_video_3_5")
+        self.assertEqual(
+            cinema["alternatives"][0]["cinema35_camera_style_hint"], "silent_machine"
+        )
+        self.assertEqual(cinema["alternatives"][0]["movement_support"], "prompt_soft")
 
     def test_prompt_lint_is_advisory_for_length_but_blocks_real_conflict(self) -> None:
         short = di.lint_prompt("The woman stops at the doorway, dramatic.", load_bearing_element="stops")

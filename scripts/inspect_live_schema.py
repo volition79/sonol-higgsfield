@@ -28,10 +28,11 @@ DEFAULT_MODELS = (
     "text2speech_v2",
     "inworld_text_to_speech",
     "speech2text",
+    "cinematic_studio_video_3_5",
 )
 DEFAULT_WORKFLOWS = (
     "voice_change", "dubbing", "reframe", "draw_to_video",
-    "cinematic_studio_video_3_5", "cinematic_studio_3_0", "cinematic_studio_image",
+    "cinematic_studio_3_0", "cinematic_studio_image",
 )
 SECRET_KEYS = {"email", "token", "access_token", "refresh_token", "authorization", "cookie"}
 
@@ -102,6 +103,7 @@ def capture(models: tuple[str, ...], workflows: tuple[str, ...]) -> tuple[dict[s
         "model_contracts": {},
         "workflow_contracts": {},
         "mcp": mcp_status(),
+        "discovery_warnings": [],
     }
     for key, argv in (
         ("account", ["higgsfield", "--json", "account", "status"]),
@@ -116,25 +118,29 @@ def capture(models: tuple[str, ...], workflows: tuple[str, ...]) -> tuple[dict[s
     available_models = {item.get("job_type") for item in snapshot.get("models", [])}
     available_workflows = {item.get("job_type") for item in snapshot.get("workflows", [])}
     for model in models:
-        if model not in available_models:
-            errors.append(f"requested model is absent: {model}")
-            continue
         try:
             snapshot["model_contracts"][model] = redact(
                 run_json(["higgsfield", "--json", "model", "get", model])
             )
+            if model not in available_models:
+                snapshot["discovery_warnings"].append(
+                    f"model contract is directly inspectable but absent from model list: {model}"
+                )
         except ProbeError as exc:
-            errors.append(str(exc))
+            prefix = f"requested model is absent: {model}; " if model not in available_models else ""
+            errors.append(prefix + str(exc))
     for workflow in workflows:
-        if workflow not in available_workflows:
-            errors.append(f"requested workflow is absent: {workflow}")
-            continue
         try:
             snapshot["workflow_contracts"][workflow] = redact(
                 run_json(["higgsfield", "--json", "workflow", "get", workflow])
             )
+            if workflow not in available_workflows:
+                snapshot["discovery_warnings"].append(
+                    f"workflow contract is directly inspectable but absent from workflow list: {workflow}"
+                )
         except ProbeError as exc:
-            errors.append(str(exc))
+            prefix = f"requested workflow is absent: {workflow}; " if workflow not in available_workflows else ""
+            errors.append(prefix + str(exc))
     snapshot["contract_fingerprints"] = {
         "models": {
             name: stable_hash(contract)

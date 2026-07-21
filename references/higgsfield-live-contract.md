@@ -33,7 +33,11 @@ Relevant current job types included:
   `speech2text`, `clip_transcriber`.
 - Workflows included `voice_change`, `dubbing`, `draw_to_video`, `reframe`,
   `cinematic_studio_image`, `cinematic_studio_3_0`, and
-  `cinematic_studio_video_3_5`.
+  `cinematic_studio_video_3_5`. In CLI 1.1.19 the Cinema 3.5 contract is
+  absent from `model list` yet inspectable through both `model get` and
+  `workflow get`. Record this as a discovery warning. Generation is
+  executable through `generate create`; `generate workflow` rejects this job
+  type. Persist execution mode `model`.
 
 The observed Cinema Studio Video 3.5 contract exposed structured
 `camera_style`, `light_scheme`, and `color_grading` enums. These are style

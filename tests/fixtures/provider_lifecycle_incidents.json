@@ -6,6 +6,9 @@
     {"raw": "processing", "expected": "RUNNING"},
     {"raw": "completed", "expected": "PROVIDER_COMPLETED"},
     {"raw": "failed", "expected": "FAILED"},
+    {"raw": "nsfw", "expected": "FAILED"},
+    {"raw": "moderated", "expected": "FAILED"},
+    {"raw": "blocked", "expected": "FAILED"},
     {"raw": "new-provider-state", "expected": "REMOTE_UNKNOWN"}
   ],
   "interrupt_case": {
