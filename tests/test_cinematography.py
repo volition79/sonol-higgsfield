@@ -89,7 +89,7 @@ class CinematographyTests(unittest.TestCase):
         self.assertTrue(compiled["prompt"].startswith("1 shot / 5s / auto / single continuous shot"))
         self.assertFalse(compiled["native_params"]["generate_audio"])
         self.assertEqual(compiled["native_params"]["resolution"], "720p")
-        self.assertIn("Begin exactly on the provided start image framing", compiled["prompt"])
+        self.assertIn("Begin from the supplied start-image composition", compiled["prompt"])
         self.assertIn("Critical invariants: same identity; same screen direction; same wardrobe", compiled["prompt"])
         self.assertNotIn("ignore this fourth invariant", compiled["prompt"])
         applied = cine.apply_compilation(grammar, compiled)

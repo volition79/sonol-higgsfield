@@ -146,6 +146,21 @@ class ProductionStateTests(unittest.TestCase):
             },
             "agent",
         )
+        state.record_start_image_review(
+            self.production,
+            "SHOT_001",
+            {
+                "final_first_frame": True,
+                "aspect_ratio_match": True,
+                "no_collage_or_labels": True,
+                "key_subject_readable": True,
+                "action_compatible": True,
+                "off_frame_reveal_risk": "LOW",
+            },
+            "PASSED",
+            "agent",
+            "start image is ready for the intended first motion",
+        )
         state.transition_shot_approval(self.production, "SHOT_001", "INTERNAL_QC_PASSED", "agent")
         state.transition_shot_approval(self.production, "SHOT_001", "USER_REVIEW", "agent")
         state.transition_shot_approval(self.production, "SHOT_001", "USER_APPROVED", "user")
@@ -248,6 +263,30 @@ class ProductionStateTests(unittest.TestCase):
         self.assertFalse(state.validate(self.production))
         self.assertEqual(state.aggregate(self.production)["summary"]["progress_percent"], 100.0)
 
+    def test_start_image_review_is_a_real_preflight_gate(self) -> None:
+        self.lock_and_budget()
+        self.add_locked_asset()
+        self.add_locked_shot()
+        self.approve_current_shot_cost()
+        reviewed = state.read_json(state.data_dir(self.production) / "shots.json")["items"][0]
+        self.assertEqual(reviewed["start_image_review"]["start_image_path"], "media/images/SHOT_001_start.png")
+        state.update_shot(self.production, "SHOT_001", {"references": {"start": "revised.png"}}, "agent")
+        shot = state.read_json(state.data_dir(self.production) / "shots.json")["items"][0]
+        self.assertEqual(shot["start_image_review"]["status"], "PENDING")
+        state.transition_generation(self.production, "SHOT_001", "READY", "agent")
+        with self.assertRaisesRegex(state.StateError, "v7 preparation review"):
+            state.transition_generation(self.production, "SHOT_001", "QUEUED", "agent")
+        assessment = {
+            "final_first_frame": True,
+            "aspect_ratio_match": True,
+            "no_collage_or_labels": True,
+            "key_subject_readable": True,
+            "action_compatible": True,
+            "off_frame_reveal_risk": "HIGH",
+        }
+        with self.assertRaisesRegex(state.StateError, "high off-frame reveal risk"):
+            state.record_start_image_review(self.production, "SHOT_001", assessment, "PASSED", "agent")
+
     def test_generation_is_blocked_without_locked_asset(self) -> None:
         self.lock_and_budget()
         state.add_asset(self.production, "CHAR_001", "character", "Hero")
@@ -304,6 +343,39 @@ class ProductionStateTests(unittest.TestCase):
         self.assertEqual(shot["references"]["start"], "media/images/SHOT_000_boundary.png")
         self.assertNotIn("media/images/SHOT_001_keyframe.png", shot["references"].get("images", []))
         self.assertEqual(shot["boundary"]["planned_keyframe_role"], "analysis_only")
+
+    def test_motivated_transition_defaults_to_prompt_only_without_end_image(self) -> None:
+        self.lock_and_budget()
+        self.add_locked_asset()
+        state.add_scene(self.production, "SCENE_000", "Prelude", 0)
+        state.add_shot(self.production, "SHOT_000", "SCENE_000", "Approach", 0)
+        shots_path = state.data_dir(self.production) / "shots.json"
+        shots = state.read_json(shots_path)
+        previous = next(item for item in shots["items"] if item["id"] == "SHOT_000")
+        previous["generation"]["status"] = "GENERATED"
+        previous["qc"]["user_review"] = "PASSED"
+        previous["start_frame_qc"]["status"] = "PASSED"
+        previous["boundary_analysis"].update(
+            {"status": "COMPLETE", "frame_path": "media/images/SHOT_000_boundary.png"}
+        )
+        state.atomic_write_json(shots_path, shots)
+        self.add_locked_shot()
+        state.set_boundary(
+            self.production,
+            "SHOT_001",
+            "motivated_transition",
+            "agent",
+            reason="a slow push changes the composition without requiring an exact landing frame",
+            previous_shot_id="SHOT_000",
+            previous_frame="media/images/SHOT_000_boundary.png",
+        )
+        shot = next(
+            item for item in state.read_json(shots_path)["items"] if item["id"] == "SHOT_001"
+        )
+        self.assertEqual(shot["seedance_plan"]["image_input_policy"]["mode"], "start_only")
+        self.assertIsNone(shot["references"].get("end"))
+        self.assertEqual(shot["boundary"]["planned_keyframe_role"], "none")
+        self.assertEqual(state.boundary_plan_errors(shot), [])
 
     def test_next_shot_requires_accepted_analysis_and_jit_adaptation(self) -> None:
         self.lock_and_budget()
@@ -379,6 +451,42 @@ class ProductionStateTests(unittest.TestCase):
         self.assertEqual(state.sequential_adaptation_errors(state.load_all(self.production), shot), [])
         shot["boundary"]["start_image_provenance"]["created_after_shot_id"] = "SHOT_000"
         self.assertTrue(any("just in time" in item for item in state.sequential_adaptation_errors(state.load_all(self.production), shot)))
+
+    def test_director_may_select_a_persisted_nonsharpest_boundary_with_reason(self) -> None:
+        self.lock_and_budget()
+        self.add_locked_asset()
+        self.add_locked_shot()
+        self.approve_current_shot_cost()
+        for target in ("READY", "QUEUED", "GENERATING", "GENERATED"):
+            state.transition_generation(self.production, "SHOT_001", target, "agent")
+        state.set_qc(self.production, "SHOT_001", "user_review", "PASSED", "user")
+        sharper = self.create_media_file("media/images/candidate_00.png")
+        better_pose = self.create_media_file("media/images/candidate_01.png")
+        state.record_boundary_analysis(
+            self.production,
+            "SHOT_001",
+            better_pose,
+            {key: f"observed {key}" for key in state.BOUNDARY_OBSERVATION_FIELDS},
+            {
+                "selection_method": "director_selected_candidate",
+                "window_seconds": 0.5,
+                "selected_timestamp": 4.8,
+                "selected_blur_score": 2.2,
+                "selected_candidate_path": better_pose,
+                "selection_reason": "cleaner hand pose and stronger eyeline despite slightly more blur",
+                "candidates": [
+                    {"timestamp": 4.7, "blur_score": 1.9, "path": sharper},
+                    {"timestamp": 4.8, "blur_score": 2.2, "path": better_pose},
+                ],
+            },
+            "continue from the readable hand pose",
+            "agent",
+        )
+        shot = state.read_json(state.data_dir(self.production) / "shots.json")["items"][0]
+        technical = shot["boundary_analysis"]["technical"]
+        self.assertEqual(technical["selection_method"], "director_selected_candidate")
+        self.assertEqual(technical["selected_candidate_path"], better_pose)
+        self.assertIn("hand pose", technical["selection_reason"])
 
     def test_visible_dialogue_requires_v3_reference_and_preserved_native_audio(self) -> None:
         self.add_locked_asset()
@@ -561,7 +669,8 @@ class ProductionStateTests(unittest.TestCase):
         self.assertIn("boundary_analysis", shot)
         self.assertIn("start_frame_qc", shot)
         self.assertIn("story", shot)
-        self.assertEqual(state.read_json(state.data_dir(self.production) / "project.json")["schema_version"], 6)
+        self.assertIn("start_image_review", shot)
+        self.assertEqual(state.read_json(state.data_dir(self.production) / "project.json")["schema_version"], 7)
         self.assertFalse(state.validate(self.production))
 
     def test_explicit_v5_migration_converts_visible_dialogue_to_native_audio(self) -> None:
@@ -586,7 +695,7 @@ class ProductionStateTests(unittest.TestCase):
                 shot["story"]["dialogue_master_sha256"] = "sha256:" + "a" * 64
             state.atomic_write_json(path, document, backup=False)
         result = state.migrate(self.production)
-        self.assertEqual(result["schema_version"], 6)
+        self.assertEqual(result["schema_version"], 7)
         shot = state.read_json(state.data_dir(self.production) / "shots.json")["items"][0]
         self.assertEqual(shot["audio"]["route"], "VISIBLE_DIALOGUE_V3_REFERENCE_NATIVE_AUDIO")
         self.assertEqual(shot["audio"]["generated_track_policy"], "PRESERVE")
@@ -594,6 +703,24 @@ class ProductionStateTests(unittest.TestCase):
         self.assertEqual(shot["audio"]["dialogue_reference_path"], "media/audio/dialogue.wav")
         self.assertNotIn("discard_generated_track", shot["audio"])
         self.assertIn("sound_design", shot["seedance_plan"])
+
+    def test_explicit_v6_migration_preserves_generated_shot_without_inventing_review(self) -> None:
+        state.add_scene(self.production, "SCENE_001", "Opening", 1)
+        state.add_shot(self.production, "SHOT_001", "SCENE_001", "Existing render", 1)
+        for name in state.DATA_FILES:
+            path = state.data_dir(self.production) / name
+            document = state.read_json(path)
+            document["schema_version"] = 6
+            if name == "shots.json":
+                shot = document["items"][0]
+                shot.pop("start_image_review", None)
+                shot["generation"]["status"] = "GENERATED"
+            state.atomic_write_json(path, document, backup=False)
+        result = state.migrate(self.production)
+        self.assertEqual(result["schema_version"], 7)
+        shot = state.read_json(state.data_dir(self.production) / "shots.json")["items"][0]
+        self.assertEqual(shot["start_image_review"]["status"], "NOT_APPLICABLE")
+        self.assertIn("no v7 preflight", shot["start_image_review"]["notes"])
 
     def test_explicit_v5_migration_preserves_intentional_silence_mode(self) -> None:
         state.add_scene(self.production, "SCENE_001", "Ending", 1)

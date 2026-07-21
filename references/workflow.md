@@ -47,8 +47,9 @@ versioned `LOCKED_FOR_VIDEO` assets.
 
 ### E. Shot board
 
-Exit per shot only after boundary strategy, the single start image (plus end
-image only for a motivated transition), prompt, duration, model, audio plan,
+Exit per shot only after boundary strategy, the reviewed start image, selected
+image-input profile (start-only by default; one evidenced essential reference
+or motivated-transition end image only as an exception), prompt, duration, model, audio plan,
 continuity handoff, and provider-compiled cinematography grammar are approved
 and locked. Board a shot only when its start image exists — for chained shots
 that means after the previous shot is accepted. Board approval is version-specific. Any grammar change
@@ -62,9 +63,10 @@ Generate one dependent shot at a time. Record the exact job ID, arguments,
 model contract snapshot, result path, and actual credits. Inspect before the
 next shot that depends on its end state: compare the rendered first frame to
 the submitted start image, score eight boundary candidates from the final half
-second, record the selected frame and semantic observations, and bind the next
-shot to that analysis before compiling. Schema v6 blocks out-of-order dependent
-generation and stale or pre-produced cut/reset start images.
+second, record the director-selected frame and semantic observations, and bind
+the next shot to that analysis before compiling. Schema v7 also blocks paid
+generation without start-image preparation review and blocks out-of-order
+dependent generation or stale/pre-produced cut/reset start images.
 
 ### G. QC and finish
 

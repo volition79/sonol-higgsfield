@@ -17,7 +17,7 @@ import cinematography
 import execution_contract
 
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 REQUIRED_REQUIREMENTS = (
     "purpose",
     "core_message",
@@ -104,6 +104,14 @@ AUDIO_ROUTES = {
     "VISIBLE_DIALOGUE_V3_REFERENCE_NATIVE_AUDIO",
 }
 BOUNDARY_OBSERVATION_FIELDS = ("pose", "gaze", "hands", "props", "framing", "lighting", "emotion")
+START_IMAGE_REVIEW_FIELDS = (
+    "final_first_frame",
+    "aspect_ratio_match",
+    "no_collage_or_labels",
+    "key_subject_readable",
+    "action_compatible",
+)
+OFF_FRAME_REVEAL_RISKS = {"LOW", "MEDIUM", "HIGH"}
 DIALOGUE_IMPACTS = {"NOT_APPLICABLE", "UNCHANGED", "RERECORDED"}
 SHA256_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 DATA_FILES = (
@@ -265,6 +273,8 @@ def default_boundary_analysis() -> dict[str, Any]:
             "window_seconds": None,
             "selected_timestamp": None,
             "selected_blur_score": None,
+            "selected_candidate_path": None,
+            "selection_reason": None,
             "candidates": [],
         },
         "next_story_adjustment": None,
@@ -281,6 +291,21 @@ def default_start_frame_qc() -> dict[str, Any]:
         "reviewed_by": None,
         "reviewed_at": None,
         "notes": None,
+        "comparison": None,
+    }
+
+
+def default_start_image_review() -> dict[str, Any]:
+    return {
+        "status": "PENDING",
+        "start_image_path": None,
+        "assessment": {
+            **{key: None for key in START_IMAGE_REVIEW_FIELDS},
+            "off_frame_reveal_risk": None,
+        },
+        "notes": None,
+        "reviewed_by": None,
+        "reviewed_at": None,
     }
 
 
@@ -375,7 +400,7 @@ def migrate(root: str | Path) -> dict[str, Any]:
     if versions == {SCHEMA_VERSION}:
         return {"migrated": False, "schema_version": SCHEMA_VERSION}
     only_version = next(iter(versions)) if len(versions) == 1 else None
-    if only_version not in {1, 2, 3, 4, 5}:
+    if only_version not in {1, 2, 3, 4, 5, 6}:
         raise StateError(f"cannot migrate mixed or unsupported schema versions: {sorted(versions, key=str)}")
     assert isinstance(only_version, int)
     from_version = only_version
@@ -391,6 +416,11 @@ def migrate(root: str | Path) -> dict[str, Any]:
         shot.setdefault("seedance_plan", cinematography.default_seedance_plan())
         for key, value in cinematography.default_seedance_plan().items():
             shot["seedance_plan"].setdefault(key, deepcopy(value))
+        image_policy = shot["seedance_plan"].setdefault(
+            "image_input_policy", deepcopy(cinematography.default_seedance_plan()["image_input_policy"])
+        )
+        for key, value in cinematography.default_seedance_plan()["image_input_policy"].items():
+            image_policy.setdefault(key, deepcopy(value))
         if from_version <= 4 and shot["seedance_plan"].get("audio_mode") == "none":
             shot["seedance_plan"]["audio_mode"] = "post_only"
         references = shot.setdefault("references", {})
@@ -401,6 +431,20 @@ def migrate(root: str | Path) -> dict[str, Any]:
         shot.setdefault("story", default_shot_story())
         shot.setdefault("boundary_analysis", default_boundary_analysis())
         shot.setdefault("start_frame_qc", default_start_frame_qc())
+        shot["start_frame_qc"].setdefault("comparison", None)
+        if "start_image_review" not in shot:
+            review = default_start_image_review()
+            if from_version == 6 and shot.get("generation", {}).get("status") in {"GENERATED", "FINAL_COMPLETE"}:
+                review["status"] = "NOT_APPLICABLE"
+                review["notes"] = "Migrated after generation; no v7 preflight review evidence exists."
+            shot["start_image_review"] = review
+        if (shot.get("references") or {}).get("end"):
+            image_policy.update(
+                {
+                    "mode": "start_end_transition",
+                    "rationale": (shot.get("boundary") or {}).get("reason") or "migrated motivated transition",
+                }
+            )
         audio = shot.setdefault("audio", {})
         if audio.get("route") == "VISIBLE_DIALOGUE_ELEVENLABS_V3":
             audio["route"] = "VISIBLE_DIALOGUE_V3_REFERENCE_NATIVE_AUDIO"
@@ -728,6 +772,7 @@ def add_shot(root: str | Path, shot_id: str, scene_id: str, title: str, order: i
         "boundary": default_boundary_plan(),
         "story": default_shot_story(),
         "boundary_analysis": default_boundary_analysis(),
+        "start_image_review": default_start_image_review(),
         "start_frame_qc": default_start_frame_qc(),
         "required_asset_ids": [],
         "references": {
@@ -792,6 +837,7 @@ def update_shot(root: str | Path, shot_id: str, patch: dict[str, Any], actor: st
         "shot_grammar",
         "seedance_plan",
         "story",
+        "start_image_review",
     }
     unknown = sorted(set(patch) - allowed)
     if unknown:
@@ -823,12 +869,18 @@ def update_shot(root: str | Path, shot_id: str, patch: dict[str, Any], actor: st
             shot["shot_grammar"] = cinematography.merge_grammar(shot.get("shot_grammar"), value)
         except cinematography.CinematographyError as exc:
             raise StateError(str(exc)) from exc
-    for nested in ("continuity", "boundary", "references", "audio", "seedance_plan", "story"):
+    image_review_invalidated = "references" in normalized or "boundary" in normalized or (
+        isinstance(normalized.get("seedance_plan"), dict)
+        and "image_input_policy" in normalized["seedance_plan"]
+    )
+    for nested in ("continuity", "boundary", "references", "audio", "seedance_plan", "story", "start_image_review"):
         if nested in normalized:
             value = normalized.pop(nested)
             if not isinstance(value, dict):
                 raise StateError(f"{nested} must be a JSON object")
             shot[nested].update(value)
+    if image_review_invalidated and "start_image_review" not in patch:
+        shot["start_image_review"] = default_start_image_review()
     if "required_asset_ids" in normalized:
         value = normalized["required_asset_ids"]
         if not isinstance(value, list) or not all(isinstance(part, str) for part in value):
@@ -889,9 +941,8 @@ def set_boundary(
         if previous_analysis.get("status") != "COMPLETE":
             raise StateError("next boundary cannot be set before previous boundary analysis")
     references = deepcopy(shot.get("references") or {})
-    # Single-start-image video contract: the paid video call carries exactly
-    # one start image; identity/location/prop references belong to the
-    # start-frame composition step, never to the video generation call.
+    # Reset every boundary to the minimum-sufficient baseline. A later explicit
+    # recovery patch may add one evidenced essential image reference.
     references["images"] = []
     references["end"] = None
     if strategy in {"continuous_match", "motivated_transition"}:
@@ -916,17 +967,20 @@ def set_boundary(
             "created_after_shot_id": chronological_previous_id,
             "created_at": utc_now(),
         }
-    if strategy == "motivated_transition":
-        if not planned_keyframe:
-            raise StateError("motivated transition requires planned_keyframe")
+    if strategy == "motivated_transition" and planned_keyframe:
         references["end"] = planned_keyframe
         role = "end_image"
+    elif strategy == "motivated_transition":
+        role = "none"
     elif strategy == "continuous_match":
         # A pre-designed keyframe may inform story re-alignment and the prompt,
         # but it is never transported in the video call.
         role = "analysis_only" if planned_keyframe else "none"
     else:
         role = "start_image"
+    image_input_policy = deepcopy(cinematography.default_seedance_plan()["image_input_policy"])
+    if strategy == "motivated_transition" and planned_keyframe:
+        image_input_policy.update({"mode": "start_end_transition", "rationale": reason.strip()})
     update_shot(
         root,
         shot_id,
@@ -943,6 +997,7 @@ def set_boundary(
                 "start_image_provenance": provenance,
             },
             "references": references,
+            "seedance_plan": {"image_input_policy": image_input_policy},
         },
         actor,
     )
@@ -1011,8 +1066,9 @@ def record_boundary_analysis(
     missing = [key for key in BOUNDARY_OBSERVATION_FIELDS if not isinstance(observations.get(key), str) or not observations[key].strip()]
     if missing:
         raise StateError("boundary analysis observations missing: " + ", ".join(missing))
-    if technical.get("selection_method") != "lowest_ffmpeg_blurdetect_mean":
-        raise StateError("boundary analysis must use lowest_ffmpeg_blurdetect_mean selection evidence")
+    selection_method = technical.get("selection_method")
+    if selection_method not in {"lowest_ffmpeg_blurdetect_mean", "director_selected_candidate"}:
+        raise StateError("boundary analysis has an unsupported selection method")
     try:
         window_seconds = float(technical.get("window_seconds", 0) or 0)
         selected_timestamp = float(technical["selected_timestamp"])
@@ -1024,17 +1080,42 @@ def record_boundary_analysis(
     candidates = technical.get("candidates")
     if not isinstance(candidates, list) or len(candidates) < 2:
         raise StateError("boundary analysis requires the scored candidate ledger")
-    scored_candidates: list[tuple[float, float]] = []
+    scored_candidates: list[tuple[float, float, str | None]] = []
     try:
         for candidate in candidates:
             if not isinstance(candidate, dict):
                 raise TypeError
-            scored_candidates.append((float(candidate["timestamp"]), float(candidate["blur_score"])))
+            candidate_path = candidate.get("path")
+            if candidate_path is not None and not isinstance(candidate_path, str):
+                raise TypeError
+            scored_candidates.append((float(candidate["timestamp"]), float(candidate["blur_score"]), candidate_path))
     except (KeyError, TypeError, ValueError) as exc:
         raise StateError("boundary analysis candidate ledger is invalid") from exc
-    expected_timestamp, expected_score = min(scored_candidates, key=lambda item: (item[1], -item[0]))
-    if selected_timestamp != expected_timestamp or selected_blur_score != expected_score:
-        raise StateError("boundary analysis selection does not match the lowest-blur candidate")
+    selected_matches = [
+        item for item in scored_candidates
+        if item[0] == selected_timestamp and item[1] == selected_blur_score
+    ]
+    if len(selected_matches) != 1:
+        raise StateError("boundary analysis selection is absent from the candidate ledger")
+    selection_reason = technical.get("selection_reason")
+    if selection_method == "lowest_ffmpeg_blurdetect_mean":
+        expected_timestamp, expected_score, _ = min(scored_candidates, key=lambda item: (item[1], -item[0]))
+        if selected_timestamp != expected_timestamp or selected_blur_score != expected_score:
+            raise StateError("boundary analysis selection does not match the lowest-blur candidate")
+    elif not isinstance(selection_reason, str) or not selection_reason.strip():
+        raise StateError("director-selected boundary requires selection_reason")
+    selected_candidate_path = technical.get("selected_candidate_path") or selected_matches[0][2]
+    if selection_method == "director_selected_candidate":
+        if not isinstance(selected_candidate_path, str) or not selected_candidate_path:
+            raise StateError("director-selected boundary requires a persisted selected_candidate_path")
+        selected_candidate = Path(selected_candidate_path).expanduser()
+        selected_frame = Path(frame_path).expanduser()
+        if not selected_candidate.is_absolute():
+            selected_candidate = _root(root) / selected_candidate
+        if not selected_frame.is_absolute():
+            selected_frame = _root(root) / selected_frame
+        if selected_candidate.resolve() != selected_frame.resolve():
+            raise StateError("director-selected frame_path must match selected_candidate_path")
     if not isinstance(next_story_adjustment, str) or not next_story_adjustment.strip():
         raise StateError("boundary analysis requires a next-story adjustment")
     analysis_id = f"BA_{shot_id}_V{shot.get('generation', {}).get('version', 1)}"
@@ -1048,6 +1129,8 @@ def record_boundary_analysis(
             "window_seconds": 0.5,
             "selected_timestamp": selected_timestamp,
             "selected_blur_score": selected_blur_score,
+            "selected_candidate_path": selected_candidate_path,
+            "selection_reason": selection_reason.strip() if isinstance(selection_reason, str) else None,
             "candidates": deepcopy(candidates),
         },
         "next_story_adjustment": next_story_adjustment.strip(),
@@ -1068,6 +1151,7 @@ def record_start_frame_qc(
     status: str,
     actor: str,
     notes: str = "",
+    comparison: dict[str, Any] | None = None,
 ) -> None:
     if status not in {"PASSED", "FAILED"}:
         raise StateError("start-frame QC status must be PASSED or FAILED")
@@ -1084,6 +1168,8 @@ def record_start_frame_qc(
         resolved_rendered = _root(root) / resolved_rendered
     if not resolved_rendered.is_file():
         raise StateError(f"rendered first frame does not exist: {resolved_rendered}")
+    if comparison is not None and not isinstance(comparison, dict):
+        raise StateError("start-frame comparison must be a JSON object")
     shot["start_frame_qc"] = {
         "status": status,
         "submitted_start_path": submitted,
@@ -1091,11 +1177,54 @@ def record_start_frame_qc(
         "reviewed_by": actor,
         "reviewed_at": utc_now(),
         "notes": notes,
+        "comparison": deepcopy(comparison),
     }
     shot["updated_at"] = utc_now()
     shots["updated_at"] = utc_now()
     atomic_write_json(path, shots)
     append_history(root, "start_frame_qc_recorded", actor, "shot", shot_id, {"status": status})
+    sync_dashboard(root)
+
+
+def record_start_image_review(
+    root: str | Path,
+    shot_id: str,
+    assessment: dict[str, Any],
+    status: str,
+    actor: str,
+    notes: str = "",
+) -> None:
+    if status not in {"PASSED", "FAILED"}:
+        raise StateError("start-image review status must be PASSED or FAILED")
+    if not isinstance(assessment, dict):
+        raise StateError("start-image assessment must be a JSON object")
+    missing = [key for key in START_IMAGE_REVIEW_FIELDS if not isinstance(assessment.get(key), bool)]
+    if missing:
+        raise StateError("start-image assessment missing boolean fields: " + ", ".join(missing))
+    risk = assessment.get("off_frame_reveal_risk")
+    if risk not in OFF_FRAME_REVEAL_RISKS:
+        raise StateError("start-image assessment has invalid off_frame_reveal_risk")
+    if status == "PASSED" and not all(assessment[key] for key in START_IMAGE_REVIEW_FIELDS):
+        raise StateError("start-image review cannot pass while a required preparation check is false")
+    if status == "PASSED" and risk == "HIGH" and not notes.strip():
+        raise StateError("high off-frame reveal risk requires review notes")
+    path = data_dir(root) / "shots.json"
+    shots = read_json(path)
+    shot = _find(shots.get("items", []), shot_id, "shot")
+    if not (shot.get("references") or {}).get("start"):
+        raise StateError("start-image review requires references.start")
+    shot["start_image_review"] = {
+        "status": status,
+        "start_image_path": (shot.get("references") or {}).get("start"),
+        "assessment": {**{key: assessment[key] for key in START_IMAGE_REVIEW_FIELDS}, "off_frame_reveal_risk": risk},
+        "notes": notes,
+        "reviewed_by": actor,
+        "reviewed_at": utc_now(),
+    }
+    shot["updated_at"] = utc_now()
+    shots["updated_at"] = utc_now()
+    atomic_write_json(path, shots)
+    append_history(root, "start_image_review_recorded", actor, "shot", shot_id, {"status": status, "risk": risk})
     sync_dashboard(root)
 
 
@@ -1350,7 +1479,7 @@ def boundary_plan_errors(shot: dict[str, Any]) -> list[str]:
     if not plan.get("reason"):
         errors.append("boundary director reason is missing")
     if role == "image_reference":
-        errors.append("planned keyframe must not ride the video call as an image_reference; single-start-image policy")
+        errors.append("planned keyframe must not ride the video call as an undocumented image_reference")
     references = shot.get("references") or {}
     inherit = plan.get("inherit_previous_last_frame")
     if strategy in {"continuous_match", "motivated_transition"}:
@@ -1366,10 +1495,11 @@ def boundary_plan_errors(shot: dict[str, Any]) -> list[str]:
     elif inherit is not False:
         errors.append("editorial cut or scene reset must not inherit the previous last frame")
     if strategy == "motivated_transition":
-        if role != "end_image":
-            errors.append("motivated transition must use the planned keyframe as end_image")
-        if not plan.get("planned_keyframe") or references.get("end") != plan.get("planned_keyframe"):
-            errors.append("motivated transition is missing its planned end keyframe")
+        if plan.get("planned_keyframe"):
+            if role != "end_image" or references.get("end") != plan.get("planned_keyframe"):
+                errors.append("motivated transition end keyframe is not transported as end_image")
+        elif role != "none" or references.get("end"):
+            errors.append("prompt-only motivated transition must not carry an end keyframe")
     if strategy in {"editorial_cut", "scene_reset"}:
         if not plan.get("planned_keyframe") or references.get("start") != plan.get("planned_keyframe"):
             errors.append("cut/reset requires its composed planned keyframe as the start_image")
@@ -1377,32 +1507,77 @@ def boundary_plan_errors(shot: dict[str, Any]) -> list[str]:
 
 
 def start_image_policy_errors(shot: dict[str, Any]) -> list[str]:
-    """Enforce the single-start-image video contract.
-
-    A paid video call carries exactly one start image, plus the locked dialogue
-    conditioning reference when the audio route requires it, plus an end image only for a
-    motivated transition. Identity, location, and prop references belong to the
-    start-frame composition step, never to the video generation call.
-    """
+    """Enforce the adaptive, minimum-sufficient Seedance image transport."""
     references = shot.get("references") or {}
     strategy = (shot.get("boundary") or {}).get("strategy")
     errors: list[str] = []
     if not references.get("start"):
         errors.append("video execution requires exactly one start image")
-    if references.get("images"):
-        errors.append("image references are reserved for start-frame composition, not the video call")
-    if references.get("end") and strategy != "motivated_transition":
+    plan = shot.get("seedance_plan") or {}
+    policy = plan.get("image_input_policy")
+    errors.extend(cinematography.validate_image_input_policy(policy))
+    policy_fields = policy if isinstance(policy, dict) else {}
+    mode = policy_fields.get("mode")
+    images = references.get("images") or []
+    end = references.get("end")
+    if mode == "start_only":
+        if images:
+            errors.append("start_only must not carry image_references")
+        if end:
+            errors.append("start_only must not carry end_image")
+    elif mode == "start_plus_essential_reference":
+        if len(images) != 1:
+            errors.append("start_plus_essential_reference requires exactly one image_reference")
+        if end:
+            errors.append("essential-reference escalation must not also carry end_image")
+        manifest = references.get("manifest") or []
+        matching = [
+            item for item in manifest
+            if isinstance(item, dict)
+            and item.get("transport_field") == "image_references"
+            and item.get("source") in images
+        ]
+        if len(matching) != 1:
+            errors.append("essential image_reference requires one matching manifest entry")
+        elif matching[0].get("semantic_role") != policy_fields.get("essential_reference_role"):
+            errors.append("essential image_reference role does not match image_input_policy")
+    elif mode == "start_end_transition":
+        if images:
+            errors.append("start_end_transition must not also carry image_references")
+        if not end:
+            errors.append("start_end_transition requires end_image")
+        if strategy != "motivated_transition":
+            errors.append("start_end_transition requires a motivated transition")
+    if end and strategy != "motivated_transition":
         errors.append("end image is allowed only for a motivated transition")
     execution = shot.get("generation", {}).get("execution") or {}
     argv = execution.get("argv") or []
     if isinstance(argv, list) and argv:
         _, flags = execution_contract.parse_flags(argv)
-        if flags.get("image_references"):
-            errors.append("execution argv must not carry image_references")
+        if flags.get("image_references") != images and (flags.get("image_references") or images):
+            errors.append("execution image_references must match the approved adaptive input policy")
         if references.get("start") and flags.get("start_image") != references.get("start"):
             errors.append("execution start_image must match references.start")
-        if flags.get("end_image") and strategy != "motivated_transition":
-            errors.append("execution end_image is allowed only for a motivated transition")
+        if flags.get("end_image") != end and (flags.get("end_image") or end):
+            errors.append("execution end_image must match the approved adaptive input policy")
+    return errors
+
+
+def start_image_review_errors(shot: dict[str, Any]) -> list[str]:
+    review = shot.get("start_image_review") or {}
+    status = review.get("status")
+    generation_status = (shot.get("generation") or {}).get("status")
+    if status == "NOT_APPLICABLE" and generation_status in {"GENERATED", "FINAL_COMPLETE"}:
+        return []
+    if status != "PASSED":
+        return ["start image has not passed the v7 preparation review"]
+    if review.get("start_image_path") != (shot.get("references") or {}).get("start"):
+        return ["start image preparation review does not match the current references.start"]
+    assessment = review.get("assessment") or {}
+    missing = [key for key in START_IMAGE_REVIEW_FIELDS if assessment.get(key) is not True]
+    errors = ["start image preparation check failed: " + ", ".join(missing)] if missing else []
+    if assessment.get("off_frame_reveal_risk") not in OFF_FRAME_REVEAL_RISKS:
+        errors.append("start image review lacks off-frame reveal risk")
     return errors
 
 
@@ -1563,6 +1738,7 @@ def shot_gate_errors(state: dict[str, dict[str, Any]], shot: dict[str, Any]) -> 
         errors.append("continuity context missing: " + ", ".join(missing_context))
     errors.extend(boundary_plan_errors(shot))
     errors.extend(start_image_policy_errors(shot))
+    errors.extend(start_image_review_errors(shot))
     errors.extend(audio_plan_errors(shot))
     errors.extend(story_contract_errors(state, shot))
     errors.extend(sequential_adaptation_errors(state, shot))

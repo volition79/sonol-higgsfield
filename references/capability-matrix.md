@@ -22,7 +22,7 @@ orchestration supplied by this skill.
 | Provider-specific camera compilation | Cinema 3.5 has structured style/light/grade; other models accept prompts/references | Model-specific guidance | Only after live schema | Native/reference/prompt/web/post support classifier and live-schema validation |
 | Camera-technique compliance scoring | No deterministic guarantee | Manual inspection | No proven score | Conflict checks before generation and explicit cinematography QC after generation |
 | Asset and shot approvals | Not a provider contract | Conversational gates only | No evidence | Versioned state machines and user-only authority |
-| Cross-shot continuity | References help generation | Prompt/reference advice | No semantic automatic score confirmed | Four boundary strategies, automatic final-0.5s blur selection, required semantic analysis record, first-frame QC, and sequential/JIT state gates |
+| Cross-shot continuity | References help generation | Prompt/reference advice | No semantic automatic score confirmed | Four boundary strategies, persisted final-0.5s candidates, blur recommendation plus director override, first-frame evidence/QC, and sequential/JIT state gates |
 | Korean on-screen text check | Image model may render text | Model recommendation | No automatic checker confirmed | Tesseract `kor+eng` text-presence gate plus review |
 | Korean pronunciation | TTS/transcript tools help | Audio routing advice | No automatic score confirmed | Pronunciation sheet, audition, transcript and manual listen |
 | Objective lip-sync scoring | No observed scoring contract | Manual review required | No evidence | `MANUAL_REQUIRED`/pass/fail gate; no invented score |
@@ -51,7 +51,8 @@ orchestration supplied by this skill.
 - Redacted live CLI/model/workflow/account/MCP preflight.
 - Korean/English OCR text-presence checker.
 - FFmpeg/ffprobe finishing helpers.
-- Schema v6 story-anchor, adaptive-analysis, first-frame-QC, JIT provenance,
+- Schema v7 story-anchor, adaptive-analysis, start-image preparation,
+  optional SSIM/PSNR first-frame evidence, director boundary selection, JIT provenance,
   compact native sound brief, generated-track policy, and recorded-reference
   SHA-256 gates.
 - Responsive local dashboard with random token and stale-version protection.

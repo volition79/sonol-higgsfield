@@ -21,20 +21,22 @@ decision.
 
 Choose one strategy before compiling every shot. Store its reason, previous
 shot ID, frame paths, and transport roles in the approved shot board. Every
-strategy resolves to **exactly one start image** in the video call.
+strategy resolves to **exactly one start image** in the video call. The table
+describes boundary intent; an end image is still optional and exceptional.
 
 | Strategy | Use when | Start image | Planned keyframe |
 |---|---|---|---|
 | `continuous_match` | Scene, axis, action, and visual flow continue | Previous accepted boundary frame, alone | `analysis_only`: informs story re-alignment and the prompt; never transported |
-| `motivated_transition` | A camera move or visual bridge changes composition | Previous accepted boundary frame | Required as `end_image`, preferably in a bridge shot |
+| `motivated_transition` | A simple camera move or bridge changes composition | Previous accepted boundary frame | Prompt exit state by default; optional `end_image` only when exact arrival matters |
 | `editorial_cut` | Reverse angle, reaction, insert, hard cut, or decisive shot-size change | Freshly composed keyframe, required | Same image (it is the start image) |
 | `scene_reset` | Place, time, style, or story unit changes | Freshly composed keyframe, required | Same image (it is the start image) |
 
 Extract the accepted previous clip's boundary frame, never a rejected
 candidate's frame. `media_pipeline.py boundary-frames` samples eight candidates
-from the final 0.5 seconds and selects the lowest FFmpeg `blurdetect` mean,
-preferring the later candidate on a tie. Preserve its timestamp, score, and
-candidate ledger as technical evidence. Do not propagate a frame before visual QC
+from the final 0.5 seconds and recommends the lowest FFmpeg `blurdetect` mean,
+preferring the later candidate on a tie. Persist every candidate. A director may
+choose another candidate when pose, expression, hands, props, edit rhythm, or
+narrative state is better, but must store its path and reason. Do not propagate a frame before visual QC
 because identity, hand, prop, or background defects would become the next
 generation's initial condition.
 
@@ -43,11 +45,13 @@ location, and prop references through the image model with the current story
 state, not from a start-frame batch produced before generation began. Cuts and
 resets also reset the quality drift a long chain accumulates.
 
-The current Seedance CLI has no native `middle_image`, and a planned image sent
-via `image_references` competes with the start image and pulls the opening
-framing away from it. When arrival at a composition matters, use it as a
-bridge shot's `end_image`, approve the bridge, and start the following shot
-from that keyframe.
+The current Seedance CLI has no native `middle_image`. Do not pretend a generic
+reference is time-pinned. When arrival at a composition matters, first try a
+prompt exit state; use a bridge shot's `end_image` only when the destination is
+exact and the transition is simple, then start the following shot from the
+accepted rendered boundary rather than assuming pixel-perfect arrival.
+For `set-boundary motivated_transition`, omit `--planned-keyframe` for the
+default prompt-only route; providing it explicitly selects the end-image route.
 
 ## Sequential adaptive story loop
 
@@ -92,12 +96,14 @@ and depth effect as well.
 
 The video call and the start-frame composition step have different transports:
 
-**Video call (single-start-image contract):**
+**Video call (minimum-sufficient image contract):**
 
 - Start frame controls entry composition and state — it is the only image the
   video call carries.
-- End frame controls handoff composition and state — `motivated_transition`
-  only.
+- End frame constrains arrival composition — optional under a
+  `motivated_transition`, never the default continuity mechanism.
+- One essential image reference may be tested only after a documented
+  start-only failure, with one changed variable and a matching manifest role.
 - A previous boundary frame becomes a start frame only for `continuous_match`
   or `motivated_transition`.
 - Audio reference carries only the locked dialogue conditioning reference on a
@@ -111,11 +117,10 @@ The video call and the start-frame composition step have different transports:
 - Location asset controls geometry, weather, lighting, and persistent objects.
 - Prop/product asset controls exact shape, label, color, orientation, and wear.
 
-Identity control in the video call comes from the start image itself, because
-it was composed from the locked references. If identity drifts late in a clip,
-shorten or reset the shot and recompose its single start image. Do not add a
-face reference to the Seedance call because every extra image competes with the
-start frame's framing and the production compiler rejects it.
+Identity control normally comes from the composed start image. If identity
+drifts late, shorten/reset and improve that frame first. If the exact same
+diagnosed failure persists, A/B test one identity reference; do not add several
+references or change the prompt at the same time.
 
 For Seedance, record each reference in `references.manifest` with its semantic
 role, CLI transport field, source, controlled traits, locked asset ID, and a
@@ -129,7 +134,7 @@ Keep the prompt compact and high-probability. Write it in this order when the
 model accepts natural language:
 
 1. Shot spec: count, duration, aspect, single continuous shot.
-2. Instruction to begin exactly on the provided start image framing.
+2. Instruction to begin from the supplied composition without reframing before motion.
 3. Who and where, then one primary action.
 4. One camera move with framing/focus.
 5. Lighting, palette, and mood in one clause.

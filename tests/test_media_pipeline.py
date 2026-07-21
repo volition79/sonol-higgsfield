@@ -69,7 +69,39 @@ class MediaPipelineTests(unittest.TestCase):
             self.assertEqual(selection["method"], "lowest_ffmpeg_blurdetect_mean")
             self.assertEqual(selection["window_seconds"], 0.5)
             self.assertEqual(len(selection["candidates"]), 8)
+            self.assertTrue(Path(selection["selected_candidate_path"]).is_file())
+            self.assertTrue(all(Path(item["path"]).is_file() for item in selection["candidates"]))
             self.assertLess(float(selection["selected_timestamp"]), 0.85)
+
+    @unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "FFmpeg is required")
+    def test_start_frame_comparison_reports_evidence_without_auto_approval(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            submitted = root / "submitted.png"
+            rendered = root / "rendered.png"
+            for path in (submitted, rendered):
+                command = [
+                    shutil.which("ffmpeg") or "ffmpeg",
+                    "-y",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "color=c=blue:size=320x240",
+                    "-frames:v",
+                    "1",
+                    str(path),
+                ]
+                completed = subprocess.run(command, text=True, capture_output=True, timeout=60, check=False)
+                self.assertEqual(completed.returncode, 0, completed.stderr)
+            result = media.compare_start_frames(
+                shutil.which("ffmpeg") or "ffmpeg",
+                shutil.which("ffprobe") or "ffprobe",
+                submitted,
+                rendered,
+            )
+            self.assertEqual(result["submitted_dimensions"], {"width": 320, "height": 240})
+            self.assertGreaterEqual(result["ssim"], 0.999)
+            self.assertIsNone(result["automatic_pass"])
 
 
 if __name__ == "__main__":

@@ -117,12 +117,15 @@ prototype. Experimental timecoded multi-shot generation is available only when
 you accept whole-clip regeneration risk.
 
 Each paid clip receives one start image. The first clip is composed up front;
-later clips either inherit the accepted boundary frame or compose a fresh frame
-just in time at a director-selected cut. The compiler rejects competing image
-references, caps the compact prompt at three critical invariants, and FFmpeg
-selects the lowest-blur candidate from eight samples in the final 0.5 seconds.
-Schema v6 then requires first-frame QC, a recorded boundary analysis, locked
-story anchors, and the previous user acceptance before the next clip can run.
+later clips either inherit an accepted boundary frame or compose a fresh frame
+just in time at a director-selected cut. Start-only is the default. One
+essential image reference is allowed only after a recorded failure and a
+one-variable A/B test; an end image is reserved for simple motivated transitions
+where exact arrival matters. FFmpeg persists eight candidates from the final
+0.5 seconds and recommends the least blurred, while the director may select a
+better narrative frame with a recorded reason. Schema v7 requires start-image
+preflight, first-frame QC, boundary analysis, locked story anchors, and previous
+user acceptance before dependent generation.
 
 ### Resume long productions safely
 

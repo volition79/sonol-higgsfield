@@ -77,23 +77,30 @@ class SeedanceContractTests(unittest.TestCase):
                 self.assertTrue(compiled["native_params"]["generate_audio"])
         self.assertFalse(self.compile(seedance_plan={"audio_mode": "post_only"})["native_params"]["generate_audio"])
 
-    def test_single_start_image_and_live_reference_boundaries_are_enforced(self) -> None:
+    def test_minimum_sufficient_image_inputs_and_live_boundaries_are_enforced(self) -> None:
         bad_cases = [
-            ({"start": "start.png", "images": ["hero.png"]}, "must not carry image references"),
+            ({"start": "start.png", "images": ["hero.png"]}, "must not carry image_references"),
             ({"start": "start.png", "videos": list(range(4))}, "video references"),
             ({"start": "start.png", "audios": list(range(4))}, "audio references"),
-            ({"audios": ["voice.wav"]}, "requires start_image"),
+            ({"audios": ["voice.wav"]}, "requires exactly one start_image"),
         ]
         for references, message in bad_cases:
             with self.subTest(message=message), self.assertRaisesRegex(cine.CinematographyError, message):
                 self.compile(seedance_plan=self.audio_reference_plan(), references=references)
-        with self.assertRaisesRegex(cine.CinematographyError, "motivated_transition"):
+        with self.assertRaisesRegex(cine.CinematographyError, "describe the exit state"):
             self.compile(references={"start": "a", "end": "b"})
         motivated = self.compile(
             references={"start": "a", "end": "b"},
             boundary_strategy="motivated_transition",
+            seedance_plan={
+                "image_input_policy": {
+                    "mode": "start_end_transition",
+                    "rationale": "a simple motivated move must land on the approved composition",
+                }
+            },
         )
         self.assertEqual(motivated["native_params"]["end_image"], "b")
+        self.assertIn("Arrive naturally", motivated["prompt"])
         with self.assertRaisesRegex(cine.CinematographyError, "at most 720p"):
             self.compile(seedance_plan={"generation_mode": "fast", "resolution": "1080p"})
 
@@ -152,12 +159,42 @@ class SeedanceContractTests(unittest.TestCase):
         self.assertNotIn("@character", compiled["prompt"])
         forbidden = deepcopy(references)
         forbidden["manifest"][0]["transport_field"] = "image_references"
-        with self.assertRaisesRegex(cine.CinematographyError, "must not carry image references"):
+        with self.assertRaisesRegex(cine.CinematographyError, "must not carry image_references"):
             self.compile(references=forbidden)
         invalid = deepcopy(references)
         invalid["manifest"][0]["prompt_alias"] = "@character"
         with self.assertRaisesRegex(cine.CinematographyError, "aliases are not exposed"):
             self.compile(references=invalid)
+
+    def test_one_essential_reference_requires_a_documented_start_only_failure(self) -> None:
+        references = {
+            "start": "start.png",
+            "images": ["location.png"],
+            "manifest": [
+                {
+                    "semantic_role": "location",
+                    "transport_field": "image_references",
+                    "source": "location.png",
+                    "controls": ["architecture", "window layout"],
+                    "prompt_alias": None,
+                }
+            ],
+        }
+        policy = {
+            "mode": "start_plus_essential_reference",
+            "rationale": "the approved location geometry was lost",
+            "baseline_job_id": "job-start-only-001",
+            "baseline_failure": "window layout changed behind the actor",
+            "essential_reference_role": "location",
+            "changed_variable": "add one location reference; keep all other inputs fixed",
+        }
+        compiled = self.compile(references=references, seedance_plan={"image_input_policy": policy})
+        self.assertEqual(compiled["native_params"]["image_references"], ["location.png"])
+        self.assertIn("single essential image reference only for location", compiled["prompt"])
+        missing_evidence = deepcopy(policy)
+        del missing_evidence["baseline_job_id"]
+        with self.assertRaisesRegex(cine.CinematographyError, "baseline_job_id"):
+            self.compile(references=references, seedance_plan={"image_input_policy": missing_evidence})
 
     def test_mini_uses_its_smaller_live_contract(self) -> None:
         compiled = self.compile(

@@ -55,7 +55,7 @@ def parser() -> argparse.ArgumentParser:
         cmd = sub.add_parser(name)
         cmd.add_argument("production")
 
-    cmd = sub.add_parser("migrate", help="upgrade a v1-v4 production to the current schema")
+    cmd = sub.add_parser("migrate", help="upgrade a v1-v6 production to the current schema")
     cmd.add_argument("production")
 
     cmd = sub.add_parser("validate-grammar", help="validate one production shot grammar")
@@ -160,6 +160,15 @@ def parser() -> argparse.ArgumentParser:
     cmd.add_argument("production")
     cmd.add_argument("shot_id")
     cmd.add_argument("rendered_first_frame_path")
+    cmd.add_argument("status", choices=("PASSED", "FAILED"))
+    cmd.add_argument("--actor", default="agent")
+    cmd.add_argument("--notes", default="")
+    cmd.add_argument("--comparison", type=json_object)
+
+    cmd = sub.add_parser("record-start-image-review")
+    cmd.add_argument("production")
+    cmd.add_argument("shot_id")
+    cmd.add_argument("assessment", type=json_object)
     cmd.add_argument("status", choices=("PASSED", "FAILED"))
     cmd.add_argument("--actor", default="agent")
     cmd.add_argument("--notes", default="")
@@ -300,6 +309,11 @@ def execute(args: argparse.Namespace) -> Any:
     elif args.command == "record-start-frame-qc":
         state.record_start_frame_qc(
             p, args.shot_id, args.rendered_first_frame_path, args.status, args.actor, args.notes,
+            args.comparison,
+        )
+    elif args.command == "record-start-image-review":
+        state.record_start_image_review(
+            p, args.shot_id, args.assessment, args.status, args.actor, args.notes,
         )
     elif args.command == "set-adaptive-story":
         state.set_adaptive_story(

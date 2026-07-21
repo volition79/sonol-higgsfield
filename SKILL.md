@@ -172,12 +172,16 @@ final references. Use GPT Image for images containing important Korean text,
 then run `ocr_check.py` before user review. Treat OCR as a gate, not proof of
 visual quality.
 
-Character, location, prop, and style references exist to **compose start
-images**, not to ride along in video calls. Feed them to the image model that
-builds each shot's single start frame; the video call then receives only that
-finished start frame. Competing composition references in a video call cause
-the model to reframe away from the start image (observed and documented), so
-the reference budget rules apply to the start-frame composition step.
+Character, location, prop, and style references normally exist to **compose the
+start image**. Start with that finished frame alone. Additional video-call
+image guidance is an evidence-led exception: after a documented start-only
+failure, A/B test exactly one indispensable reference with every other variable
+held fixed. Never add a stack of speculative references.
+
+Before board approval, record the v7 start-image review: it is the final first
+frame, matches the requested aspect, contains no collage/labels, makes the key
+subject readable, supports the first action, and states off-frame-reveal risk.
+A technically sharp image can still be a poor motion initial condition.
 
 Move each asset through:
 
@@ -192,26 +196,31 @@ an asset that is not `LOCKED_FOR_VIDEO`.
 Prefer Seedance 2.0 for serious general video. Respect the live reference and
 duration limits.
 
-Apply the single-start-image video contract, enforced by the generation gate:
+Apply the minimum-sufficient image contract, enforced by the generation gate:
 
 - Every paid video call carries **exactly one start image** — the previous
   accepted shot's boundary frame on a chain, or a freshly composed keyframe at
   a cut/reset.
-- No `image_references` in a video call. Identity and location control comes
-  from the start image itself, which was composed from those references.
-- `end_image` only for a declared `motivated_transition`.
+- Default `image_input_policy.mode=start_only`: no `image_references` and no
+  `end_image`; describe the intended exit state in the prompt.
+- Escalate to `start_plus_essential_reference` only after persisting the failed
+  baseline job, failure diagnosis, semantic role, rationale, and the single
+  changed variable. It carries exactly one matching manifest reference.
+- Use `start_end_transition` only for a declared `motivated_transition` whose
+  exact arrival composition matters and whose motion is simple and plausible.
+  Do not use it for dialogue, complex action, or a large angle/location jump.
 - `audio_references` only for the locked dialogue reference on a visible-dialogue
   route (the start image satisfies the visual-reference requirement).
-- If identity drifts late in a clip, shorten or reset the shot and recompose its
-  single start image; do not bypass the compiler with an extra face reference.
+- If identity drifts late, first shorten/reset and improve the start image; only
+  then test one essential identity reference under the documented A/B rule.
 
 Keep the prompt compact and high-probability: shot spec, subject and one
 action, one camera move, lighting and mood, an explicit instruction to begin
-exactly on the provided start image framing, and the exit state. Long
+from the supplied start-image composition without reframing before motion, and
+the exit state. Long
 enumerations of invariants and reference descriptions lower compliance.
-The Seedance compiler enforces `start_image`, rejects `image_references`, rejects
-an `end_image` outside `motivated_transition`, and emits at most three critical
-invariants.
+The compiler enforces the selected image-input profile, rejects an `end_image`
+outside `motivated_transition`, and emits at most three critical invariants.
 
 Submit with `--wait --json` only after the guarded runner has re-fetched the
 selected contract, confirmed remaining project-ceiling capacity, and checked
@@ -271,9 +280,9 @@ unless a concrete provider or deterministic checker produced evidence.
 
 Run the sequential adaptive loop after every accepted shot:
 
-1. Extract the boundary frame with `media_pipeline.py boundary-frames`. It
-   samples eight frames in the final 0.5 seconds, scores each with FFmpeg
-   `blurdetect`, and writes the lowest-blur candidate plus timestamp and score.
+1. Extract boundary candidates with `media_pipeline.py boundary-frames`. It
+   persists eight frames from the final 0.5 seconds and scores each with FFmpeg
+   `blurdetect`. Lowest blur is a default recommendation, not the director.
 2. Analyze that frame against the story plan: pose, gaze, props, framing,
    lighting, emotional state.
 3. Micro-adjust the next shot's action and prompt to match the frame, keeping
@@ -285,9 +294,11 @@ Boundary strategies:
 - `continuous_match`: the accepted previous boundary frame becomes the next
   `start_image`, alone. A pre-designed keyframe is analysis input for story
   re-alignment only — it is never transported in the video call.
-- `motivated_transition`: previous boundary frame as `start_image` and the
-  planned new keyframe as `end_image`, preferably in a dedicated bridge shot.
-  This is the only strategy that carries a second image.
+- `motivated_transition`: normally still use start-only plus a prompt exit
+  state. Add the planned keyframe as `end_image` only when an exact arrival is
+  more important than motion freedom, preferably in a dedicated simple bridge.
+  In `set-boundary`, omit `--planned-keyframe` for prompt-only; supplying it
+  explicitly selects the end-image profile.
 - `editorial_cut`: for reverse angles, reactions, inserts, decisive shot-size
   changes, or hard cuts, do not inherit the previous frame; compose a new
   start image now from locked references and the current story state.
@@ -299,11 +310,11 @@ Boundary strategies:
 The current CLI exposes no native `middle_image`. Never claim that a generic
 image reference is temporally pinned to the middle of a clip.
 
-Immediately after generation, compare the clip's actual first frame against the
-submitted start image before accepting the shot. The provider treats the start
-image as strong guidance, not a pixel lock; a visible framing jump at the
-boundary is a QC failure to repair or regenerate, not a surprise to discover in
-the edit.
+Immediately after generation, extract the actual first frame and compare it to
+the submitted image. `media_pipeline.py compare-start-frame` records dimensions,
+SSIM, and PSNR as technical evidence only; framing, identity, and semantic
+composition still require visual judgment. The start image is strong guidance,
+not a pixel lock.
 
 Extract the accepted previous clip with `media_pipeline.py boundary-frames`,
 then persist the director decision with `sonol_higgsfield.py set-boundary`. For
@@ -314,6 +325,10 @@ python3 "$SONOL_HIGGSFIELD_SKILL/scripts/sonol_higgsfield.py" set-boundary \
   <production> <shot_id> continuous_match \
   --previous-shot-id <previous_shot_id> --previous-frame <accepted_end.png> \
   --planned-keyframe <current_keyframe.png> --reason "<director rationale>"
+python3 "$SONOL_HIGGSFIELD_SKILL/scripts/sonol_higgsfield.py" record-start-image-review \
+  <production> <shot_id> '<assessment-json>' PASSED --notes "<risk rationale>"
+python3 "$SONOL_HIGGSFIELD_SKILL/scripts/media_pipeline.py" compare-start-frame \
+  <submitted_start.png> <rendered_first.png>
 ```
 
 After generation, persist first-frame comparison and the semantic boundary
@@ -332,7 +347,8 @@ python3 "$SONOL_HIGGSFIELD_SKILL/scripts/sonol_higgsfield.py" set-adaptive-story
   NOT_APPLICABLE --previous-shot-id <shot_id>
 ```
 
-Schema v6 blocks the next shot until the immediate previous shot is generated,
+Schema v7 blocks paid generation until the start image passes preparation
+review, and blocks the next shot until the immediate previous shot is generated,
 user-accepted, first-frame-QC passed, boundary-analyzed, and bound to the next
 adaptive plan. A cut/reset start image must carry just-in-time provenance after
 that previous shot. Chained shots must use the exact recorded boundary frame.
@@ -371,8 +387,9 @@ shots, QC gaps, and any manual checks still required.
 
 - Never start paid generation before requirements and budget are user-approved.
 - Never approve or queue a shot without a complete provider-compiled and validated `shot_grammar`.
-- Never pack `image_references` into a paid video call; references compose the
-  single start image, and only a `motivated_transition` may add an `end_image`.
+- Never add video-call image references speculatively. Default to start-only;
+  after a recorded failure, allow exactly one essential reference as a
+  controlled A/B variable. Only a motivated transition may add an `end_image`.
 - Never pre-produce start frames beyond the next shot to generate; compose them
   just-in-time from the current story state.
 - Never queue a dependent shot without a user-locked story contract, accepted
@@ -382,6 +399,7 @@ shots, QC gaps, and any manual checks still required.
   SHA-256 fingerprint in both the audio plan and adaptive story snapshot.
 - Never accept a shot without comparing its actual first frame to the submitted
   start image.
+- Never treat SSIM, PSNR, or lowest blur as an automatic creative approval.
 - Never combine multiple primary camera moves unless the user accepts an experimental A/B test.
 - Never insert web `@character`, `@style`, `@motion`, or `@audio` aliases into a CLI prompt unless the live CLI schema explicitly exposes alias binding.
 - Never let Seedance inherit its current `generate_audio=true` default; compile an explicit shot audio route.

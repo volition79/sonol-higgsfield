@@ -57,20 +57,33 @@ or a shot count other than one. `seedance_multishot_experimental` requires:
 - acceptance that one failed internal beat normally requires regenerating the
   full provider clip.
 
-## Reference manifest
+## Image-input policy and reference manifest
 
-**Single-start-image video contract.** The start image is guidance, not a
-pixel lock: when a video call also carries `image_references`, the model
-blends all of them and can reframe the opening away from the start image
-entirely (verified in production, 2026-07: a tight two-shot start image plus
-two wide composition references opened wide). Therefore a paid Seedance call
-carries exactly one `start_image`; `end_image` only for a declared motivated
-transition; `audio_references` only for a locked dialogue reference. Character,
-location, prop, and style references are consumed by the image model that
-composes the start frame, never by the video call. If identity drifts, shorten
-or reset the shot and recompose the start image rather than adding a face
-reference. Always instruct the prompt to begin exactly on the provided start
-image framing, and QC the rendered first frame against the submitted start image.
+The start image is guidance, not a pixel lock. Its adherence is usually best
+served by a minimum-sufficient package, but “fewer is always better” is not a
+provider guarantee. One documented production run showed two extra wide
+composition references pulling a tight start image wide; that is evidence for
+a cautious default, not proof that every additional reference degrades every
+shot.
+
+Use one of three explicit profiles:
+
+1. `start_only` — default. Exactly one `start_image`, no `image_references`, no
+   `end_image`. Express the exit state in the prompt.
+2. `start_plus_essential_reference` — recovery experiment only. A prior
+   start-only job must identify the failure; hold prompt/model/settings fixed
+   and add exactly one indispensable character, location, prop, product, or
+   style reference with a matching manifest role.
+3. `start_end_transition` — exact arrival composition only. Requires a
+   `motivated_transition`, no extra image reference, and a simple physically
+   plausible path between the two frames. Avoid it for visible dialogue,
+   complex choreography, or large angle/location changes; use an editorial cut
+   or dedicated bridge instead.
+
+Character/location/prop/style references are therefore consumed by the image
+model by default, but one may enter the video call after evidence-led escalation.
+If identity drifts, first shorten/reset and improve the start frame before
+testing that exception.
 
 Keep start-frame composition inputs outside the video-call references. This is
 an image-composition record, not a Seedance transport manifest:
@@ -86,18 +99,18 @@ an image-composition record, not a Seedance transport manifest:
 }
 ```
 
-The live provider schema may expose `image_references`, but this production
-compiler deliberately rejects them for Seedance video. Allowed production
-transport is one `start_image`, optional `end_image` only for a motivated
-transition, explicitly justified `video_references`, and the locked visible
-dialogue `audio_references`. Never invent web `@` aliases for a CLI command.
+For an essential-reference escalation, add a video transport manifest entry
+whose `transport_field` is `image_references`, whose semantic role equals the
+policy role, and whose `controls` list states only what it is meant to preserve.
+Store `baseline_job_id`, `baseline_failure`, `rationale`, and
+`changed_variable`. Never invent web `@` aliases for a CLI command.
 
-Apply the live limits fail-closed (under the single-start-image contract the
-image budget is consumed by the start-frame composition step, not the video
-call):
+Apply the live limits fail-closed (the default image budget is consumed during
+start-frame composition; only a documented escalation adds a video reference):
 
-- production policy: one start image, optional motivated-transition end image,
-  and zero `image_references` in the video call;
+- production policy: one start image; zero image references by default, or
+  exactly one after documented escalation; optional end image only under the
+  mutually exclusive motivated-transition profile;
 - videos: at most 3;
 - audios: at most 3;
 - all references including start/end: at most 12;
@@ -137,10 +150,17 @@ fails, simplify the brief and regenerate before proposing an external repair.
 
 ## Iteration and QC
 
+Before submission, review the start image as a motion initial condition: final
+first-frame intent, exact aspect ratio, no collage/labels, readable key subject,
+compatibility with the first action, and off-frame-reveal risk. Put crucial
+identity/location facts inside the frame when possible. Do not expect the model
+to reconstruct unseen space or hidden anatomy exactly from a still.
+
 Compare the output against the exact shot contract rather than asking whether
 it looks generally cinematic:
 
-- rendered first frame against the submitted start image (framing jump = fail);
+- rendered first frame against the submitted start image; record dimension,
+  SSIM, and PSNR evidence if useful, but decide framing/identity semantically;
 - primary action and final state;
 - camera movement, framing, axis, and prohibited cuts/zoom;
 - identity, wardrobe, product, location, and reference roles;

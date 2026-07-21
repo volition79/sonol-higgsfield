@@ -222,6 +222,14 @@ def default_seedance_plan() -> dict[str, Any]:
         "prototype": True,
         "timed_beats": [],
         "camera_invariants": [],
+        "image_input_policy": {
+            "mode": "start_only",
+            "rationale": None,
+            "baseline_job_id": None,
+            "baseline_failure": None,
+            "essential_reference_role": None,
+            "changed_variable": None,
+        },
         "sound_design": {
             "dialogue": None,
             "ambience": None,
@@ -231,6 +239,47 @@ def default_seedance_plan() -> dict[str, Any]:
         },
         "experimental_approved": False,
     }
+
+
+def validate_image_input_policy(value: Any) -> list[str]:
+    """Validate the evidence-led Seedance image transport policy."""
+    if not isinstance(value, dict):
+        return ["seedance_plan.image_input_policy must be an object"]
+    allowed = {
+        "mode",
+        "rationale",
+        "baseline_job_id",
+        "baseline_failure",
+        "essential_reference_role",
+        "changed_variable",
+    }
+    unknown = sorted(set(value) - allowed)
+    errors = ["unknown image_input_policy fields: " + ", ".join(unknown)] if unknown else []
+    mode = value.get("mode")
+    if mode not in {"start_only", "start_plus_essential_reference", "start_end_transition"}:
+        errors.append(f"invalid image_input_policy.mode: {mode}")
+        return errors
+    for key in allowed - {"mode"}:
+        item = value.get(key)
+        if item is not None and (not isinstance(item, str) or not item.strip()):
+            errors.append(f"image_input_policy.{key} must be a non-empty string or null")
+    if mode == "start_plus_essential_reference":
+        for key in (
+            "rationale",
+            "baseline_job_id",
+            "baseline_failure",
+            "essential_reference_role",
+            "changed_variable",
+        ):
+            if not isinstance(value.get(key), str) or not value[key].strip():
+                errors.append(f"start_plus_essential_reference requires image_input_policy.{key}")
+        if value.get("essential_reference_role") not in REFERENCE_ROLES:
+            errors.append("image_input_policy.essential_reference_role is invalid")
+    if mode == "start_end_transition" and (
+        not isinstance(value.get("rationale"), str) or not value["rationale"].strip()
+    ):
+        errors.append("start_end_transition requires image_input_policy.rationale")
+    return errors
 
 
 def validate_sound_design(value: Any, *, require_complete: bool = False) -> list[str]:
@@ -689,7 +738,13 @@ def _seedance_native_params(
         unknown = sorted(set(plan) - set(merged))
         if unknown:
             raise CinematographyError("unknown seedance_plan fields: " + ", ".join(unknown))
-        merged.update(deepcopy(plan))
+        copied = deepcopy(plan)
+        if "image_input_policy" in copied:
+            policy = copied.pop("image_input_policy")
+            if not isinstance(policy, dict):
+                raise CinematographyError("seedance_plan.image_input_policy must be an object")
+            merged["image_input_policy"].update(policy)
+        merged.update(copied)
     if merged["mode"] not in {"controlled_single_shot", "seedance_multishot_experimental"}:
         raise CinematographyError(f"invalid Seedance production mode: {merged['mode']}")
     shot_count = merged.get("shot_count")
@@ -713,6 +768,9 @@ def _seedance_native_params(
     )
     if sound_errors:
         raise CinematographyError("invalid Seedance sound design:\n- " + "\n- ".join(sound_errors))
+    image_policy_errors = validate_image_input_policy(merged.get("image_input_policy"))
+    if image_policy_errors:
+        raise CinematographyError("invalid Seedance image input policy:\n- " + "\n- ".join(image_policy_errors))
     transport = _reference_transport(references)
     duration_value = float(grammar["duration_seconds"])
     if not duration_value.is_integer():
@@ -736,9 +794,38 @@ def _seedance_native_params(
     audio_count = len(transport["audio_references"])
     errors: list[str] = []
     if not transport["start_image"]:
-        errors.append("Seedance single-start-image contract requires start_image")
-    if transport["image_references"]:
-        errors.append("Seedance video calls must not carry image references; compose them into start_image")
+        errors.append("Seedance image-input contract requires exactly one start_image")
+    image_policy = merged["image_input_policy"]
+    image_mode = image_policy["mode"]
+    if image_mode == "start_only":
+        if transport["image_references"]:
+            errors.append("start_only must not carry image_references")
+        if transport["end_image"]:
+            errors.append("start_only must not carry end_image; describe the exit state in the prompt")
+    elif image_mode == "start_plus_essential_reference":
+        if len(transport["image_references"]) != 1:
+            errors.append("start_plus_essential_reference requires exactly one image_reference")
+        if transport["end_image"]:
+            errors.append("start_plus_essential_reference must not also carry end_image")
+        matching_manifest = [
+            item for item in (references or {}).get("manifest", [])
+            if isinstance(item, dict)
+            and item.get("transport_field") == "image_references"
+            and item.get("source") in transport["image_references"]
+        ]
+        if len(matching_manifest) != 1:
+            errors.append("the essential image_reference requires exactly one matching manifest entry")
+        elif matching_manifest[0].get("semantic_role") != image_policy.get("essential_reference_role"):
+            errors.append("essential image_reference manifest role does not match image_input_policy")
+        elif not matching_manifest[0].get("controls"):
+            errors.append("essential image_reference manifest must declare controlled attributes")
+    elif image_mode == "start_end_transition":
+        if transport["image_references"]:
+            errors.append("start_end_transition must not also carry image_references")
+        if not transport["end_image"]:
+            errors.append("start_end_transition requires end_image")
+        if boundary_strategy != "motivated_transition":
+            errors.append("start_end_transition requires boundary_strategy=motivated_transition")
     if transport["end_image"] and boundary_strategy != "motivated_transition":
         errors.append("Seedance end_image is allowed only for boundary_strategy=motivated_transition")
     if not 4 <= duration_value <= 15:
@@ -836,13 +923,23 @@ def compile_prompt(
         compact_look = list(dict.fromkeys(look_terms))[:2]
         prompt_parts = [
             header,
-            "Begin exactly on the provided start image framing",
+            "Begin from the supplied start-image composition without reframing before motion starts",
             f"Subject and action: {subject.strip()}; {action.strip()}",
             f"Camera: {', '.join(compact_camera)}",
             f"Setting, light, and mood: {setting.strip()}; {', '.join(compact_look)}; {grammar.get('dramatic_beat') or ''}",
             *beat_text,
             f"End state: {exit_state.strip()}",
         ]
+        image_policy = plan["image_input_policy"]
+        if image_policy["mode"] == "start_plus_essential_reference":
+            prompt_parts.append(
+                "Use the single essential image reference only for "
+                f"{image_policy['essential_reference_role']}; keep the start-image composition authoritative"
+            )
+        elif image_policy["mode"] == "start_end_transition":
+            prompt_parts.append(
+                "Arrive naturally at the supplied end-image composition without inserting an editorial cut"
+            )
     else:
         prompt_parts = [
             f"{subject} in {setting}".strip(),

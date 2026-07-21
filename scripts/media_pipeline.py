@@ -19,6 +19,8 @@ class MediaError(RuntimeError):
 
 
 BLUR_MEAN_RE = re.compile(r"blur mean:\s*([0-9]+(?:\.[0-9]+)?)", re.IGNORECASE)
+SSIM_ALL_RE = re.compile(r"All:([0-9]+(?:\.[0-9]+)?)", re.IGNORECASE)
+PSNR_AVERAGE_RE = re.compile(r"average:([0-9]+(?:\.[0-9]+)?|inf)", re.IGNORECASE)
 
 
 def executable(name: str) -> str:
@@ -72,6 +74,68 @@ def probe_duration(ffprobe: str, source: Path) -> float:
     if duration <= 0:
         raise MediaError("video duration must be positive")
     return duration
+
+
+def probe_dimensions(ffprobe: str, source: Path) -> tuple[int, int]:
+    command = [
+        ffprobe,
+        "-v",
+        "error",
+        "-select_streams",
+        "v:0",
+        "-show_entries",
+        "stream=width,height",
+        "-of",
+        "json",
+        str(source),
+    ]
+    completed = subprocess.run(command, text=True, capture_output=True, timeout=60, check=False)
+    if completed.returncode:
+        raise MediaError(completed.stderr.strip() or "ffprobe could not read image dimensions")
+    try:
+        stream = json.loads(completed.stdout)["streams"][0]
+        width, height = int(stream["width"]), int(stream["height"])
+    except (KeyError, IndexError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise MediaError("ffprobe returned invalid image dimensions") from exc
+    if width <= 0 or height <= 0:
+        raise MediaError("image dimensions must be positive")
+    return width, height
+
+
+def compare_start_frames(ffmpeg: str, ffprobe: str, submitted: Path, rendered: Path) -> dict[str, Any]:
+    """Return technical similarity evidence without deciding semantic acceptance."""
+    source_dimensions = probe_dimensions(ffprobe, submitted)
+    rendered_dimensions = probe_dimensions(ffprobe, rendered)
+    width, height = source_dimensions
+    common = [ffmpeg, "-hide_banner", "-nostats", "-i", str(submitted), "-i", str(rendered)]
+    metrics: dict[str, float] = {}
+    for name, expression, pattern in (
+        ("ssim", f"[1:v]scale={width}:{height}[candidate];[0:v][candidate]ssim", SSIM_ALL_RE),
+        ("psnr", f"[1:v]scale={width}:{height}[candidate];[0:v][candidate]psnr", PSNR_AVERAGE_RE),
+    ):
+        completed = subprocess.run(
+            [*common, "-lavfi", expression, "-frames:v", "1", "-f", "null", "-"],
+            text=True,
+            capture_output=True,
+            timeout=60,
+            check=False,
+        )
+        if completed.returncode:
+            raise MediaError(completed.stderr.strip() or f"ffmpeg {name} comparison failed")
+        matches = pattern.findall(completed.stderr)
+        if not matches:
+            raise MediaError(f"ffmpeg did not return {name} evidence")
+        value = matches[-1]
+        metrics[name] = float("inf") if str(value).casefold() == "inf" else float(value)
+    return {
+        "method": "ffmpeg_scaled_ssim_psnr_evidence",
+        "submitted_dimensions": {"width": source_dimensions[0], "height": source_dimensions[1]},
+        "rendered_dimensions": {"width": rendered_dimensions[0], "height": rendered_dimensions[1]},
+        "dimension_match": source_dimensions == rendered_dimensions,
+        **metrics,
+        "automatic_pass": None,
+        "interpretation": "technical evidence only; framing, identity, and composition require visual review",
+    }
 
 
 def boundary_candidate_timestamps(duration: float, *, window_seconds: float = 0.5, count: int = 8) -> list[float]:
@@ -152,39 +216,33 @@ def extract_boundary_frames(
     duration = probe_duration(ffprobe, source)
     candidates: list[dict[str, Any]] = []
     commands: list[dict[str, object]] = [first]
-    with tempfile.TemporaryDirectory(prefix="sonol-boundary-") as temporary:
-        candidate_dir = Path(temporary)
-        for index, timestamp in enumerate(
-            boundary_candidate_timestamps(duration, window_seconds=window_seconds, count=candidate_count)
-        ):
-            image = candidate_dir / f"candidate_{index:02d}.png"
-            extract_command = [
-                ffmpeg,
-                "-y",
-                "-i",
-                str(source),
-                "-ss",
-                f"{timestamp:.6f}",
-                "-frames:v",
-                "1",
-                "-update",
-                "1",
-                str(image),
-            ]
-            commands.append(run(extract_command))
-            candidates.append(
-                {
-                    "timestamp": timestamp,
-                    "blur_score": blur_score(ffmpeg, image),
-                    "path": str(image),
-                }
-            )
-        selected = select_sharpest_candidate(candidates)
-        shutil.copy2(Path(str(selected["path"])), end)
-    public_candidates = [
-        {"timestamp": item["timestamp"], "blur_score": item["blur_score"]}
-        for item in candidates
-    ]
+    for index, timestamp in enumerate(
+        boundary_candidate_timestamps(duration, window_seconds=window_seconds, count=candidate_count)
+    ):
+        image = output_path(folder / f"candidate_{index:02d}.png")
+        extract_command = [
+            ffmpeg,
+            "-y",
+            "-i",
+            str(source),
+            "-ss",
+            f"{timestamp:.6f}",
+            "-frames:v",
+            "1",
+            "-update",
+            "1",
+            str(image),
+        ]
+        commands.append(run(extract_command))
+        candidates.append(
+            {
+                "timestamp": timestamp,
+                "blur_score": blur_score(ffmpeg, image),
+                "path": str(image),
+            }
+        )
+    selected = select_sharpest_candidate(candidates)
+    shutil.copy2(Path(str(selected["path"])), end)
     return {
         "start": str(start),
         "end": str(end),
@@ -194,7 +252,9 @@ def extract_boundary_frames(
             "candidate_count": candidate_count,
             "selected_timestamp": selected["timestamp"],
             "selected_blur_score": selected["blur_score"],
-            "candidates": public_candidates,
+            "selected_candidate_path": selected["path"],
+            "selection_reason": "lowest blur score; director may choose another persisted candidate",
+            "candidates": candidates,
         },
         "commands": commands,
     }
@@ -302,6 +362,10 @@ def main() -> int:
     cmd.add_argument("--window-seconds", type=float, default=0.5)
     cmd.add_argument("--candidates", type=int, default=8)
 
+    cmd = sub.add_parser("compare-start-frame")
+    cmd.add_argument("submitted", type=Path)
+    cmd.add_argument("rendered", type=Path)
+
     cmd = sub.add_parser("extract-audio")
     cmd.add_argument("input", type=Path)
     cmd.add_argument("output", type=Path)
@@ -369,6 +433,18 @@ def main() -> int:
                 window_seconds=args.window_seconds,
                 candidate_count=args.candidates,
             )
+        elif args.command == "compare-start-frame":
+            submitted = checked_input(args.submitted)
+            rendered = checked_input(args.rendered)
+            if args.dry_run:
+                result = {
+                    "dry_run": True,
+                    "submitted": str(submitted),
+                    "rendered": str(rendered),
+                    "method": "ffmpeg_scaled_ssim_psnr_evidence",
+                }
+            else:
+                result = compare_start_frames(ffmpeg, ffprobe, submitted, rendered)
         elif args.command == "extract-audio":
             source, target = checked_input(args.input), output_path(args.output)
             result = run([ffmpeg, "-y", "-i", str(source), "-vn", "-c:a", "pcm_s24le", str(target)], args.dry_run)
