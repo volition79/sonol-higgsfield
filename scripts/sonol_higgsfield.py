@@ -55,7 +55,7 @@ def parser() -> argparse.ArgumentParser:
         cmd = sub.add_parser(name)
         cmd.add_argument("production")
 
-    cmd = sub.add_parser("migrate", help="upgrade a v1-v3 production to the current schema")
+    cmd = sub.add_parser("migrate", help="upgrade a v1-v4 production to the current schema")
     cmd.add_argument("production")
 
     cmd = sub.add_parser("validate-grammar", help="validate one production shot grammar")
@@ -91,6 +91,11 @@ def parser() -> argparse.ArgumentParser:
     cmd = sub.add_parser("approve-budget")
     cmd.add_argument("production")
     cmd.add_argument("max_credits", type=float)
+    cmd.add_argument("--actor", default="user")
+
+    cmd = sub.add_parser("lock-story", help="user-lock immutable story anchor beats")
+    cmd.add_argument("production")
+    cmd.add_argument("anchor_beats", type=json_value, help='JSON array of {"id","description"}')
     cmd.add_argument("--actor", default="user")
 
     cmd = sub.add_parser("add-asset")
@@ -140,6 +145,32 @@ def parser() -> argparse.ArgumentParser:
     cmd.add_argument("--previous-frame")
     cmd.add_argument("--planned-keyframe")
     cmd.add_argument("--cut-type")
+    cmd.add_argument("--actor", default="agent")
+
+    cmd = sub.add_parser("record-boundary-analysis")
+    cmd.add_argument("production")
+    cmd.add_argument("shot_id")
+    cmd.add_argument("frame_path")
+    cmd.add_argument("observations", type=json_object)
+    cmd.add_argument("technical", type=json_object)
+    cmd.add_argument("next_story_adjustment")
+    cmd.add_argument("--actor", default="agent")
+
+    cmd = sub.add_parser("record-start-frame-qc")
+    cmd.add_argument("production")
+    cmd.add_argument("shot_id")
+    cmd.add_argument("rendered_first_frame_path")
+    cmd.add_argument("status", choices=("PASSED", "FAILED"))
+    cmd.add_argument("--actor", default="agent")
+    cmd.add_argument("--notes", default="")
+
+    cmd = sub.add_parser("set-adaptive-story")
+    cmd.add_argument("production")
+    cmd.add_argument("shot_id")
+    cmd.add_argument("anchor_beat_ids", type=json_value, help="JSON array of locked anchor beat IDs")
+    cmd.add_argument("adjustment_reason")
+    cmd.add_argument("dialogue_impact", choices=sorted(state.DIALOGUE_IMPACTS))
+    cmd.add_argument("--previous-shot-id")
     cmd.add_argument("--actor", default="agent")
 
     cmd = sub.add_parser("transition-shot")
@@ -219,6 +250,7 @@ def execute(args: argparse.Namespace) -> Any:
             subject=args.subject, setting=args.setting, action=args.action,
             exit_state=args.exit_state, invariants=args.invariant, live_schema=live_schema,
             seedance_plan=shot.get("seedance_plan"), references=shot.get("references"),
+            boundary_strategy=(shot.get("boundary") or {}).get("strategy"),
         )
         grammar = cinematography.apply_compilation(shot.get("shot_grammar", {}), compiled)
         if args.apply:
@@ -234,6 +266,8 @@ def execute(args: argparse.Namespace) -> Any:
         state.lock_requirements(p, args.actor)
     elif args.command == "approve-budget":
         state.approve_budget(p, args.max_credits, args.actor)
+    elif args.command == "lock-story":
+        state.lock_story_contract(p, args.anchor_beats, args.actor)
     elif args.command == "add-asset":
         state.add_asset(p, args.asset_id, args.asset_type, args.label)
     elif args.command == "update-asset":
@@ -257,6 +291,20 @@ def execute(args: argparse.Namespace) -> Any:
             previous_frame=args.previous_frame,
             planned_keyframe=args.planned_keyframe,
             cut_type=args.cut_type,
+        )
+    elif args.command == "record-boundary-analysis":
+        state.record_boundary_analysis(
+            p, args.shot_id, args.frame_path, args.observations, args.technical,
+            args.next_story_adjustment, args.actor,
+        )
+    elif args.command == "record-start-frame-qc":
+        state.record_start_frame_qc(
+            p, args.shot_id, args.rendered_first_frame_path, args.status, args.actor, args.notes,
+        )
+    elif args.command == "set-adaptive-story":
+        state.set_adaptive_story(
+            p, args.shot_id, args.anchor_beat_ids, args.adjustment_reason,
+            args.dialogue_impact, args.actor, args.previous_shot_id,
         )
     elif args.command == "transition-shot":
         state.transition_shot_approval(p, args.shot_id, args.target, args.actor, args.reason)

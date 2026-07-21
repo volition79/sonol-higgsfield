@@ -632,6 +632,7 @@ def _seedance_native_params(
     grammar: dict[str, Any],
     plan: dict[str, Any] | None,
     references: dict[str, Any] | None,
+    boundary_strategy: str | None,
 ) -> tuple[dict[str, Any], dict[str, Any], list[str]]:
     merged = default_seedance_plan()
     if plan is not None:
@@ -681,6 +682,12 @@ def _seedance_native_params(
     video_count = len(transport["video_references"])
     audio_count = len(transport["audio_references"])
     errors: list[str] = []
+    if not transport["start_image"]:
+        errors.append("Seedance single-start-image contract requires start_image")
+    if transport["image_references"]:
+        errors.append("Seedance video calls must not carry image references; compose them into start_image")
+    if transport["end_image"] and boundary_strategy != "motivated_transition":
+        errors.append("Seedance end_image is allowed only for boundary_strategy=motivated_transition")
     if not 4 <= duration_value <= 15:
         errors.append("Seedance duration must be between 4 and 15 seconds")
     if merged.get("prototype") and duration_value > 8:
@@ -714,6 +721,7 @@ def compile_prompt(
     live_schema: dict[str, Any] | None = None,
     seedance_plan: dict[str, Any] | None = None,
     references: dict[str, Any] | None = None,
+    boundary_strategy: str | None = None,
     schema_max_age_hours: float = 24.0,
 ) -> dict[str, Any]:
     catalog, _, support = load_knowledge()
@@ -745,7 +753,9 @@ def compile_prompt(
     native_params = _native_params(grammar, provider, profile)
     seedance_errors: list[str] = []
     if provider in {"seedance_2_0", "seedance_2_0_mini"}:
-        native_params, plan, seedance_errors = _seedance_native_params(provider, grammar, seedance_plan, references)
+        native_params, plan, seedance_errors = _seedance_native_params(
+            provider, grammar, seedance_plan, references, boundary_strategy
+        )
     if seedance_errors:
         raise CinematographyError("Seedance plan rejected:\n- " + "\n- ".join(seedance_errors))
     duration = grammar.get("duration_seconds")
@@ -767,12 +777,14 @@ def compile_prompt(
         header = ""
         beat_text = []
     if plan:
+        compact_camera = list(dict.fromkeys(camera_terms))[:4]
+        compact_look = list(dict.fromkeys(look_terms))[:2]
         prompt_parts = [
             header,
+            "Begin exactly on the provided start image framing",
             f"Subject and action: {subject.strip()}; {action.strip()}",
-            f"Setting and lighting: {setting.strip()}; {', '.join(look_terms)}",
-            f"Camera: {', '.join(camera_terms)}",
-            f"Mood and style: {grammar.get('dramatic_beat') or ''}",
+            f"Camera: {', '.join(compact_camera)}",
+            f"Setting, light, and mood: {setting.strip()}; {', '.join(compact_look)}; {grammar.get('dramatic_beat') or ''}",
             *beat_text,
             f"End state: {exit_state.strip()}",
         ]
@@ -784,11 +796,15 @@ def compile_prompt(
             ", ".join(look_terms),
             f"End state: {exit_state.strip()}",
         ]
-    all_invariants = [*constraints, *(invariants or [])]
+    all_invariants = list(invariants or [])
     if plan:
         all_invariants.extend(plan.get("camera_invariants") or [])
+    all_invariants.extend(constraints)
     if all_invariants:
-        prompt_parts.append("Camera invariants: " + "; ".join(dict.fromkeys(all_invariants)))
+        unique_invariants = list(dict.fromkeys(item.strip() for item in all_invariants if item.strip()))
+        if plan:
+            unique_invariants = unique_invariants[:3]
+        prompt_parts.append("Critical invariants: " + "; ".join(unique_invariants))
     if plan:
         prompt_parts.append(f"Audio: {plan['audio_mode']}")
     prompt = ". ".join(part for part in prompt_parts if part and part != " in")

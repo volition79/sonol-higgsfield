@@ -31,6 +31,8 @@ def main() -> int:
     parser.add_argument("--action", required=True)
     parser.add_argument("--exit-state", required=True)
     parser.add_argument("--invariant", action="append", default=[])
+    parser.add_argument("--references", type=load_object)
+    parser.add_argument("--boundary-strategy")
     parser.add_argument("--live-schema", type=Path)
     args = parser.parse_args()
     schema = json.loads(args.live_schema.read_text(encoding="utf-8")) if args.live_schema else None
@@ -38,7 +40,8 @@ def main() -> int:
         compiled = cinematography.compile_prompt(
             args.grammar, provider=args.provider, subject=args.subject, setting=args.setting,
             action=args.action, exit_state=args.exit_state, invariants=args.invariant,
-            live_schema=schema,
+            live_schema=schema, references=args.references,
+            boundary_strategy=args.boundary_strategy,
         )
         result = {"compiled": compiled, "shot_grammar": cinematography.apply_compilation(args.grammar, compiled)}
     except (cinematography.CinematographyError, OSError, json.JSONDecodeError) as exc:

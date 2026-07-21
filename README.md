@@ -116,6 +116,14 @@ The default is one controlled action and one primary camera movement per short
 prototype. Experimental timecoded multi-shot generation is available only when
 you accept whole-clip regeneration risk.
 
+Each paid clip receives one start image. The first clip is composed up front;
+later clips either inherit the accepted boundary frame or compose a fresh frame
+just in time at a director-selected cut. The compiler rejects competing image
+references, caps the compact prompt at three critical invariants, and FFmpeg
+selects the lowest-blur candidate from eight samples in the final 0.5 seconds.
+Schema v5 then requires first-frame QC, a recorded boundary analysis, locked
+story anchors, and the previous user acceptance before the next clip can run.
+
 ### Resume long productions safely
 
 A local production directory and dashboard preserve requirements, versions,

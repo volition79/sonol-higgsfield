@@ -28,6 +28,12 @@ class ProductionStateTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.temp.cleanup()
 
+    def create_media_file(self, relative: str) -> str:
+        path = self.production / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"test-media")
+        return relative
+
     def confirm_requirements(self) -> None:
         values = {
             "purpose": "brand film",
@@ -51,6 +57,11 @@ class ProductionStateTests(unittest.TestCase):
     def lock_and_budget(self) -> None:
         self.confirm_requirements()
         state.lock_requirements(self.production, "user")
+        state.lock_story_contract(
+            self.production,
+            [{"id": "BEAT_001", "description": "The hero discovers the decisive clue"}],
+            "user",
+        )
 
     def approve_current_shot_cost(self, credits: float = 2.5, ceiling: float = 3.0) -> None:
         del credits
@@ -87,7 +98,9 @@ class ProductionStateTests(unittest.TestCase):
             live_schema=self.live_schema,
             seedance_plan={"aspect_ratio": "16:9", "resolution": "720p"},
             references={"start": "media/images/SHOT_001_start.png"},
+            boundary_strategy="scene_reset",
         )
+        contract = state.read_json(state.data_dir(self.production) / "project.json")["story_contract"]
         argv = ["seedance_2_0", "--prompt", compiled["prompt"]]
         for key, value in compiled["native_params"].items():
             argv.extend(("--" + key.replace("_", "-"), json.dumps(value) if not isinstance(value, str) else value))
@@ -103,6 +116,11 @@ class ProductionStateTests(unittest.TestCase):
                     "planned_keyframe_role": "start_image",
                     "cut_type": "opening",
                     "reason": "first shot establishes a new scene",
+                    "start_image_provenance": {
+                        "mode": "initial_composition",
+                        "created_after_shot_id": None,
+                        "created_at": "2026-07-21T00:00:00+00:00",
+                    },
                 },
                 "references": {"start": "media/images/SHOT_001_start.png"},
                 "required_asset_ids": ["CHAR_001"],
@@ -111,6 +129,15 @@ class ProductionStateTests(unittest.TestCase):
                 "seedance_plan": {"aspect_ratio": "16:9", "resolution": "720p", "audio_mode": "post_only"},
                 "execution": {"mode": "model", "argv": argv},
                 "shot_grammar": cinematography.apply_compilation(grammar, compiled),
+                "story": {
+                    "anchor_beat_ids": ["BEAT_001"] if contract["status"] == "LOCKED" else [],
+                    "story_contract_version": contract["version"] if contract["status"] == "LOCKED" else None,
+                    "adaptive_revision": 1,
+                    "based_on_previous_shot_id": None,
+                    "based_on_boundary_analysis_id": None,
+                    "adjustment_reason": "initial shot plan",
+                    "dialogue_impact": "NOT_APPLICABLE",
+                },
             },
             "agent",
         )
@@ -148,6 +175,16 @@ class ProductionStateTests(unittest.TestCase):
         self.assertEqual(approval["mode"], "PROJECT_CEILING")
         self.assertTrue(approval["unpriced_job_risk_acknowledged"])
 
+    def test_story_anchor_contract_requires_user_and_persists_version(self) -> None:
+        beats = [{"id": "BEAT_001", "description": "The irreversible discovery"}]
+        with self.assertRaisesRegex(state.StateError, "only the user"):
+            state.lock_story_contract(self.production, beats, "agent")
+        state.lock_story_contract(self.production, beats, "user")
+        contract = state.read_json(state.data_dir(self.production) / "project.json")["story_contract"]
+        self.assertEqual(contract["status"], "LOCKED")
+        self.assertEqual(contract["version"], 1)
+        self.assertEqual(contract["anchor_beats"], beats)
+
     def test_korean_asset_ocr_and_version_specific_approval(self) -> None:
         state.add_asset(self.production, "TEXT_001", "graphic", "Title")
         state.update_asset(self.production, "TEXT_001", {"contains_korean_text": True}, "agent")
@@ -173,7 +210,7 @@ class ProductionStateTests(unittest.TestCase):
         state.transition_generation(self.production, "SHOT_001", "QUEUED", "agent")
         state.transition_generation(self.production, "SHOT_001", "GENERATING", "agent")
         state.transition_generation(self.production, "SHOT_001", "GENERATED", "agent")
-        with self.assertRaisesRegex(state.StateError, "QC incomplete"):
+        with self.assertRaisesRegex(state.StateError, "start-frame QC"):
             state.transition_generation(self.production, "SHOT_001", "FINAL_COMPLETE", "agent")
         for check in ("technical", "transcript", "lip_sync", "visual", "continuity", "cinematography"):
             state.set_qc(self.production, "SHOT_001", check, "PASSED", "agent")
@@ -181,6 +218,27 @@ class ProductionStateTests(unittest.TestCase):
         with self.assertRaisesRegex(state.StateError, "only the user"):
             state.set_qc(self.production, "SHOT_001", "user_review", "PASSED", "agent")
         state.set_qc(self.production, "SHOT_001", "user_review", "PASSED", "user")
+        rendered_first = self.create_media_file("media/images/SHOT_001_rendered_first.png")
+        boundary_frame = self.create_media_file("media/images/SHOT_001_boundary.png")
+        state.record_start_frame_qc(self.production, "SHOT_001", rendered_first, "PASSED", "agent")
+        state.record_boundary_analysis(
+            self.production,
+            "SHOT_001",
+            boundary_frame,
+            {key: f"observed {key}" for key in state.BOUNDARY_OBSERVATION_FIELDS},
+            {
+                "selection_method": "lowest_ffmpeg_blurdetect_mean",
+                "window_seconds": 0.5,
+                "selected_timestamp": 4.85,
+                "selected_blur_score": 2.1,
+                "candidates": [
+                    {"timestamp": 4.7, "blur_score": 2.5},
+                    {"timestamp": 4.85, "blur_score": 2.1},
+                ],
+            },
+            "continue from the held clue",
+            "agent",
+        )
         state.transition_generation(self.production, "SHOT_001", "FINAL_COMPLETE", "agent")
         self.assertFalse(state.validate(self.production))
         self.assertEqual(state.aggregate(self.production)["summary"]["progress_percent"], 100.0)
@@ -197,6 +255,22 @@ class ProductionStateTests(unittest.TestCase):
     def test_continuous_boundary_requires_previous_frame_as_start_image(self) -> None:
         self.lock_and_budget()
         self.add_locked_asset()
+        state.add_scene(self.production, "SCENE_000", "Prelude", 0)
+        state.add_shot(self.production, "SHOT_000", "SCENE_000", "Approach", 0)
+        shots_path = state.data_dir(self.production) / "shots.json"
+        shots = state.read_json(shots_path)
+        previous = next(item for item in shots["items"] if item["id"] == "SHOT_000")
+        previous["generation"]["status"] = "GENERATED"
+        previous["qc"]["user_review"] = "PASSED"
+        previous["start_frame_qc"]["status"] = "PASSED"
+        previous["boundary_analysis"].update(
+            {
+                "status": "COMPLETE",
+                "analysis_id": "BA_SHOT_000_V1",
+                "frame_path": "media/images/SHOT_000_boundary.png",
+            }
+        )
+        state.atomic_write_json(shots_path, shots)
         self.add_locked_shot()
         with self.assertRaisesRegex(state.StateError, "previous_shot_id"):
             state.set_boundary(
@@ -213,14 +287,93 @@ class ProductionStateTests(unittest.TestCase):
             "agent",
             reason="same action and camera axis continue",
             previous_shot_id="SHOT_000",
-            previous_frame="media/images/SHOT_000_end.png",
+            previous_frame="media/images/SHOT_000_boundary.png",
             planned_keyframe="media/images/SHOT_001_keyframe.png",
         )
-        shot = state.read_json(state.data_dir(self.production) / "shots.json")["items"][0]
+        shot = next(
+            item
+            for item in state.read_json(state.data_dir(self.production) / "shots.json")["items"]
+            if item["id"] == "SHOT_001"
+        )
         self.assertEqual(state.boundary_plan_errors(shot), [])
-        self.assertEqual(shot["references"]["start"], "media/images/SHOT_000_end.png")
+        self.assertEqual(shot["references"]["start"], "media/images/SHOT_000_boundary.png")
         self.assertNotIn("media/images/SHOT_001_keyframe.png", shot["references"].get("images", []))
         self.assertEqual(shot["boundary"]["planned_keyframe_role"], "analysis_only")
+
+    def test_next_shot_requires_accepted_analysis_and_jit_adaptation(self) -> None:
+        self.lock_and_budget()
+        self.add_locked_asset()
+        self.add_locked_shot()
+        self.approve_current_shot_cost()
+        for target in ("READY", "QUEUED", "GENERATING", "GENERATED"):
+            state.transition_generation(self.production, "SHOT_001", target, "agent")
+        state.set_qc(self.production, "SHOT_001", "user_review", "PASSED", "user")
+        state.add_shot(self.production, "SHOT_002", "SCENE_001", "Reaction", 2)
+        with self.assertRaisesRegex(state.StateError, "previous start-frame QC"):
+            state.set_boundary(
+                self.production,
+                "SHOT_002",
+                "editorial_cut",
+                "agent",
+                reason="reverse angle after the discovery",
+                planned_keyframe="media/images/SHOT_002_start.png",
+            )
+        rendered_first = self.create_media_file("media/images/SHOT_001_rendered_first.png")
+        boundary_frame = self.create_media_file("media/images/SHOT_001_boundary.png")
+        state.record_start_frame_qc(self.production, "SHOT_001", rendered_first, "PASSED", "agent")
+        with self.assertRaisesRegex(state.StateError, "previous boundary analysis"):
+            state.set_adaptive_story(
+                self.production,
+                "SHOT_002",
+                ["BEAT_001"],
+                "react to the accepted hand position",
+                "NOT_APPLICABLE",
+                "agent",
+                "SHOT_001",
+            )
+        state.record_boundary_analysis(
+            self.production,
+            "SHOT_001",
+            boundary_frame,
+            {key: f"observed {key}" for key in state.BOUNDARY_OBSERVATION_FIELDS},
+            {
+                "selection_method": "lowest_ffmpeg_blurdetect_mean",
+                "window_seconds": 0.5,
+                "selected_timestamp": 4.75,
+                "selected_blur_score": 1.5,
+                "candidates": [
+                    {"timestamp": 4.6, "blur_score": 2.0},
+                    {"timestamp": 4.75, "blur_score": 1.5},
+                ],
+            },
+            "stage the reaction from the held-clue pose",
+            "agent",
+        )
+        state.set_boundary(
+            self.production,
+            "SHOT_002",
+            "editorial_cut",
+            "agent",
+            reason="reverse angle after the discovery",
+            planned_keyframe="media/images/SHOT_002_start.png",
+        )
+        state.set_adaptive_story(
+            self.production,
+            "SHOT_002",
+            ["BEAT_001"],
+            "stage the reaction from the accepted hand position",
+            "NOT_APPLICABLE",
+            "agent",
+            "SHOT_001",
+        )
+        shot = next(
+            item
+            for item in state.read_json(state.data_dir(self.production) / "shots.json")["items"]
+            if item["id"] == "SHOT_002"
+        )
+        self.assertEqual(state.sequential_adaptation_errors(state.load_all(self.production), shot), [])
+        shot["boundary"]["start_image_provenance"]["created_after_shot_id"] = "SHOT_000"
+        self.assertTrue(any("just in time" in item for item in state.sequential_adaptation_errors(state.load_all(self.production), shot)))
 
     def test_visible_dialogue_requires_locked_eleven_v3_master(self) -> None:
         self.add_locked_asset()
@@ -235,6 +388,7 @@ class ProductionStateTests(unittest.TestCase):
                     "voice_provider": "elevenlabs",
                     "voice_model": "eleven_v3",
                     "dialogue_master_path": "media/audio/dialogue.wav",
+                    "dialogue_master_sha256": "sha256:" + "a" * 64,
                     "discard_generated_track": True,
                     "final_mix_required": True,
                 },
@@ -245,6 +399,31 @@ class ProductionStateTests(unittest.TestCase):
         )
         shot = state.read_json(state.data_dir(self.production) / "shots.json")["items"][0]
         self.assertEqual(state.audio_plan_errors(shot), [])
+        shot["audio"]["dialogue_master_sha256"] = None
+        self.assertTrue(any("SHA-256" in item for item in state.audio_plan_errors(shot)))
+
+    def test_offscreen_narration_requires_a_fingerprinted_master(self) -> None:
+        self.add_locked_asset()
+        self.add_locked_shot()
+        state.update_shot(
+            self.production,
+            "SHOT_001",
+            {
+                "audio": {
+                    "route": "OFFSCREEN_NARRATION",
+                    "has_visible_dialogue": False,
+                    "narration_master_path": "media/audio/narration.wav",
+                    "narration_master_sha256": "sha256:" + "b" * 64,
+                    "final_mix_required": True,
+                },
+                "seedance_plan": {"audio_mode": "post_only"},
+            },
+            "agent",
+        )
+        shot = state.read_json(state.data_dir(self.production) / "shots.json")["items"][0]
+        self.assertEqual(state.audio_plan_errors(shot), [])
+        shot["audio"]["narration_master_sha256"] = "invalid"
+        self.assertTrue(any("SHA-256" in item for item in state.audio_plan_errors(shot)))
 
     def test_guarded_paid_runner_uses_budget_without_live_quote(self) -> None:
         self.lock_and_budget()
@@ -361,6 +540,10 @@ class ProductionStateTests(unittest.TestCase):
         shot = state.read_json(state.data_dir(self.production) / "shots.json")["items"][0]
         self.assertIn("shot_grammar", shot)
         self.assertEqual(shot["qc"]["cinematography"], "PENDING")
+        self.assertIn("boundary_analysis", shot)
+        self.assertIn("start_frame_qc", shot)
+        self.assertIn("story", shot)
+        self.assertEqual(state.read_json(state.data_dir(self.production) / "project.json")["schema_version"], 5)
         self.assertFalse(state.validate(self.production))
 
     def test_history_and_backup_are_durable(self) -> None:
