@@ -143,8 +143,9 @@ enum from this skill into a paid command.
 For `seedance_2_0` or `seedance_2_0_mini`, read
 [seedance-2-0-production.md](references/seedance-2-0-production.md). Default to
 one controlled shot and 720p prototypes no longer than eight seconds. Compile
-native audio off explicitly for post-only and silent routes; compile it on
-explicitly for the approved visible-dialogue audio-reference route. Use
+native audio on explicitly for the default no-dialogue native-sound route and
+the approved visible-dialogue audio-reference route. Compile it off only for
+intentional silence, off-screen narration, or a user-approved post-only repair. Use
 experimental timecoded multi-shot only after the user
 accepts whole-clip regeneration risk.
 
@@ -249,8 +250,12 @@ ceiling is a preflight control, not a guaranteed hard cap on one submitted job.
 Inspect every completed shot before generating the next dependent shot. Read
 [audio-qc.md](references/audio-qc.md) and choose exactly one route:
 
-- `NO_DIALOGUE_POST`: generate picture with `audio_mode=post_only`; build room
-  tone, ambience, Foley, effects, and music in finishing.
+- `NO_DIALOGUE_NATIVE_SOUND`: default when nobody visibly speaks. Use
+  `audio_mode=native_sfx`, describe the complete ambience, zero to three
+  synchronized effects, music or `none`, and exclusions, then preserve the
+  QC-passed native track without creative overdubs.
+- `NO_DIALOGUE_POST`: user-approved repair exception only. Generate picture
+  with `audio_mode=post_only` and construct the explicitly authorized stems.
 - `INTENTIONAL_SILENCE`: use `audio_mode=none` only when the final shot itself
   must remain silent.
 - `OFFSCREEN_NARRATION`: generate picture with `audio_mode=post_only`; create
@@ -269,7 +274,7 @@ Keep voice IDs, pronunciation sheet, speaker assignment, and reference path in t
 shot record. Multiple visible speakers require distinct locked voices or an
 authorized ElevenLabs dialogue workflow. Treat the V3 file as a conditioning
 reference, not a transparent final waveform; never claim Seedance preserves it
-sample-for-sample.
+sample-for-sample or guarantees the same timing, timbre, or fidelity.
 
 Use `speech2text` for transcript evidence when available. Use FFmpeg for
 extraction, trimming, time stretch, muxing, and assembly. Do not describe
@@ -360,20 +365,20 @@ color, ambience, dialogue timing, and narrative emotion.
 
 Repair in this order: edit point, J/L cut, common ambience, grade, minor speed
 adjustment, cutaway, bridge shot, transition clip, then next-shot regeneration.
-For visible dialogue with native production audio, do not add replacement
-dialogue, ambience, Foley, effects, or music by default. If its required sound
-fails QC, simplify the sound brief and regenerate the affected shot; external
-replacement is an explicitly approved exception requiring a synchronization and
-lost-effects recovery plan.
+For native production audio, do not add replacement dialogue, ambience, Foley,
+effects, or music by default. If required sound fails QC, simplify the sound
+brief and regenerate the affected shot; external replacement is an explicitly
+approved exception requiring a synchronization and lost-effects recovery plan.
 Generate a four-second-or-longer transition when the live model minimum
 requires it and trim locally to the intended one-to-three-second edit.
 
 ### 9. Finish and deliver
 
 Require transcript, technical, lip-sync/manual, continuity, and user-review
-gates before marking a shot final. Assemble only accepted versions. For visible
-dialogue, keep the Seedance-rendered track as the complete production sound and
-use `media_pipeline.py preserve-audio` when a copy-only finishing pass is needed.
+gates before marking a shot final. Assemble only accepted versions. For
+no-dialogue native sound and visible dialogue, keep the Seedance-rendered track
+as the complete production sound and use `media_pipeline.py preserve-audio`
+when a copy-only finishing pass is needed.
 Do not add creative audio stems after generation by default; limit finishing to
 technical checks, stream-preserving assembly, captions, and grade. Keep
 `strip-audio` and `final-mix` for post-only routes or an explicitly approved
@@ -403,9 +408,9 @@ shots, QC gaps, and any manual checks still required.
 - Never combine multiple primary camera moves unless the user accepts an experimental A/B test.
 - Never insert web `@character`, `@style`, `@motion`, or `@audio` aliases into a CLI prompt unless the live CLI schema explicitly exposes alias binding.
 - Never let Seedance inherit its current `generate_audio=true` default; compile an explicit shot audio route.
-- Never queue visible dialogue without a complete compact sound brief covering
-  voice, ambience, synchronized effects, music state, and exclusions.
-- Never discard or creatively overdub an accepted visible-dialogue native track
+- Never queue native audio without a complete compact sound brief covering
+  dialogue state, ambience, synchronized effects, music state, and exclusions.
+- Never discard or creatively overdub an accepted native production track
   unless the user approves an exceptional recovery plan.
 - Never present recent-actual arithmetic as a live quote, fixed price, or hard spending guarantee.
 - Never claim a lens number, camera preset, or prompt-soft instruction guarantees the rendered result.

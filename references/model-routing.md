@@ -31,8 +31,11 @@ only for the locked visible-dialogue conditioning reference.
 
 ## Audio
 
-- No visible dialogue: use `post_only`; create ambience, Foley, effects, and
-  music after picture generation.
+- No visible dialogue: default to `native_sfx`; specify the complete ambience,
+  key synchronized effects, music state, and exclusions before generation, then
+  preserve the accepted Seedance track.
+- No visible dialogue after repeated native-sound failure: use `post_only` only
+  after the user approves external reconstruction as a repair exception.
 - Intentionally silent final shot: use `none`.
 - Off-screen narration: use `post_only`, generate authorized TTS separately, and
   mix locally. For Korean, audition pronunciation before the full film.

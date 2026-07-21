@@ -91,12 +91,24 @@ class ProductionStateTests(unittest.TestCase):
             "주인공이 중요한 단서를 발견한다", genre="drama", provider="seedance_2_0",
             duration_seconds=5, top_n=1,
         )["recommendations"][0]["grammar"]
+        seedance_plan = {
+            "aspect_ratio": "16:9",
+            "resolution": "720p",
+            "audio_mode": "native_sfx",
+            "sound_design": {
+                "dialogue": "none",
+                "ambience": "quiet indoor room tone matching the visible office",
+                "synchronized_effects": ["soft paper movement when the note is lifted"],
+                "music": "none",
+                "exclusions": ["no voices", "no unrelated impacts"],
+            },
+        }
         compiled = cinematography.compile_prompt(
             grammar, provider="seedance_2_0", subject="the hero", setting="a quiet room",
             action="notices the hidden clue", exit_state="the hero holds still in realization",
             invariants=["same face and wardrobe"],
             live_schema=self.live_schema,
-            seedance_plan={"aspect_ratio": "16:9", "resolution": "720p"},
+            seedance_plan=seedance_plan,
             references={"start": "media/images/SHOT_001_start.png"},
             boundary_strategy="scene_reset",
         )
@@ -125,13 +137,13 @@ class ProductionStateTests(unittest.TestCase):
                 "references": {"start": "media/images/SHOT_001_start.png"},
                 "required_asset_ids": ["CHAR_001"],
                 "audio": {
-                    "route": "NO_DIALOGUE_POST",
+                    "route": "NO_DIALOGUE_NATIVE_SOUND",
                     "has_visible_dialogue": False,
-                    "generated_track_policy": "NOT_GENERATED",
-                    "final_mix_required": True,
+                    "generated_track_policy": "PRESERVE",
+                    "final_mix_required": False,
                 },
                 "model": "seedance_2_0",
-                "seedance_plan": {"aspect_ratio": "16:9", "resolution": "720p", "audio_mode": "post_only"},
+                "seedance_plan": seedance_plan,
                 "execution": {"mode": "model", "argv": argv},
                 "shot_grammar": cinematography.apply_compilation(grammar, compiled),
                 "story": {
@@ -524,6 +536,20 @@ class ProductionStateTests(unittest.TestCase):
         shot["audio"]["dialogue_reference_sha256"] = None
         self.assertTrue(any("SHA-256" in item for item in state.audio_plan_errors(shot)))
         shot["audio"]["dialogue_reference_sha256"] = "sha256:" + "a" * 64
+        shot["audio"]["generated_track_policy"] = "DISCARD"
+        self.assertTrue(any("preserve" in item for item in state.audio_plan_errors(shot)))
+
+    def test_no_dialogue_native_sound_requires_complete_brief_and_preservation(self) -> None:
+        self.add_locked_asset()
+        self.add_locked_shot()
+        shot = state.read_json(state.data_dir(self.production) / "shots.json")["items"][0]
+        self.assertEqual(state.audio_plan_errors(shot), [])
+        shot["seedance_plan"]["sound_design"]["ambience"] = None
+        self.assertTrue(any("sound_design.ambience" in item for item in state.audio_plan_errors(shot)))
+        shot["seedance_plan"]["sound_design"]["ambience"] = "quiet room tone"
+        shot["seedance_plan"]["sound_design"]["dialogue"] = "a man says hello"
+        self.assertTrue(any("explicitly say none" in item for item in state.audio_plan_errors(shot)))
+        shot["seedance_plan"]["sound_design"]["dialogue"] = "none"
         shot["audio"]["generated_track_policy"] = "DISCARD"
         self.assertTrue(any("preserve" in item for item in state.audio_plan_errors(shot)))
 

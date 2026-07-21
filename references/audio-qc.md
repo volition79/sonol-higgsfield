@@ -6,7 +6,8 @@ Classify before generation and confirm after output:
 
 | Situation | Route |
 |---|---|
-| No visible dialogue; ambience/SFX/music will be added | `NO_DIALOGUE_POST`; Seedance `post_only`, then construct locally |
+| No visible dialogue; natural production sound is required | `NO_DIALOGUE_NATIVE_SOUND`; Seedance `native_sfx` with a complete brief, then preserve its native track |
+| No visible dialogue; native sound repeatedly failed and the user approved external rebuilding | `NO_DIALOGUE_POST`; Seedance `post_only`, then construct only the authorized stems |
 | Final shot is deliberately silent | `INTENTIONAL_SILENCE`; Seedance `none` |
 | Off-screen narration | `OFFSCREEN_NARRATION`; Seedance `post_only`, TTS and mix separately |
 | Visible dialogue | `VISIBLE_DIALOGUE_V3_REFERENCE_NATIVE_AUDIO`; use a locked V3 reference and a complete sound brief, then preserve the QC-passed Seedance native track |
@@ -17,6 +18,21 @@ is not a transparent pass-through or a promise of sample-identical output. The
 Seedance-rendered track is the candidate production mix because it contains the
 jointly generated dialogue, ambience, and synchronized effects. Do not use
 `voice_change` as a general cleanup or stem separation tool.
+
+## No-dialogue native production sound
+
+Default to `NO_DIALOGUE_NATIVE_SOUND` when nobody visibly speaks but the shot
+needs ambience, effects, or music. Set `audio_mode=native_sfx`,
+`generate_audio=true`, `has_visible_dialogue=false`,
+`generated_track_policy=PRESERVE`, and `final_mix_required=false`. Complete the
+same compact sound brief used by dialogue shots: set `dialogue` to `none`, name
+the whole ambience, list only zero to three essential synchronized effects,
+set music or `none`, and list exclusions. Do not send an audio reference.
+
+Judge the result as a complete production track. If a required event fails,
+simplify the brief and regenerate before proposing `NO_DIALOGUE_POST`. Moving
+to post-only requires an explicit user-approved repair decision; it is not the
+default way to obtain cleaner stems.
 
 ## ElevenLabs V3 dialogue reference
 
@@ -78,7 +94,8 @@ closures and phrase boundaries. Record `PASSED`, `FAILED`, or
 
 ## Finishing policy
 
-For `VISIBLE_DIALOGUE_V3_REFERENCE_NATIVE_AUDIO`:
+For `NO_DIALOGUE_NATIVE_SOUND` and
+`VISIBLE_DIALOGUE_V3_REFERENCE_NATIVE_AUDIO`:
 
 1. Lock the accepted picture and native production track together.
 2. Do not add replacement dialogue, ambience, Foley, effects, or music by
@@ -89,8 +106,8 @@ For `VISIBLE_DIALOGUE_V3_REFERENCE_NATIVE_AUDIO`:
 5. Check transcript, pronunciation, lip sync, sound-event sync, peaks,
    clipping, silence, channel layout, sample rate, and A/V duration.
 
-For `NO_DIALOGUE_POST` or `OFFSCREEN_NARRATION`, build the authorized external
-mix from its planned stems. `INTENTIONAL_SILENCE` receives no audio. External
+For the exceptional `NO_DIALOGUE_POST` route or `OFFSCREEN_NARRATION`, build the
+authorized external mix from its planned stems. `INTENTIONAL_SILENCE` receives no audio. External
 replacement of a visible-dialogue track is an exception: record the reason,
 obtain user approval, and require word/phoneme alignment plus a plan to preserve
 or rebuild any lost generated effects. A single global time offset is not
@@ -111,8 +128,9 @@ report that gap rather than claiming broadcast compliance.
   adding or replacing creative stems.
 - `strip-audio`: remove the Seedance-rendered track without re-encoding picture.
 - `final-mix`: combine external dialogue, ambience, effects, and music while
-  mapping picture only from the generated video; it is for post-only routes or
-  an approved replacement exception, not the visible-dialogue default.
+  mapping picture only from the generated video; it is for off-screen narration,
+  an approved post-only route, or a replacement exception—not the native-sound
+  default.
 - `concat`: deterministic re-encode of accepted shot sequence.
 
 These tools do not perform dialogue separation, denoising, mastering, automatic

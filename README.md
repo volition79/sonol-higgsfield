@@ -75,8 +75,9 @@ For the complete production workflow, also provide:
 - Tesseract with Korean (`kor`) language data when Korean text OCR is required
 - An active Higgsfield account, selected workspace, and enough credits for the
   generation you approve
-- An ElevenLabs API key and approved voice IDs when visible dialogue or external
-  narration is required
+- An ElevenLabs API key and approved voice IDs when the skill must generate a
+  new visible-dialogue reference or external narration; not required when an
+  authorized finished reference file is already supplied
 - Optional Higgsfield MCP access; the skill treats the live CLI schema as the
   canonical execution contract and does not require MCP
 
@@ -124,8 +125,12 @@ one-variable A/B test; an end image is reserved for simple motivated transitions
 where exact arrival matters. FFmpeg persists eight candidates from the final
 0.5 seconds and recommends the least blurred, while the director may select a
 better narrative frame with a recorded reason. Schema v7 requires start-image
-preflight, first-frame QC, boundary analysis, locked story anchors, and previous
-user acceptance before dependent generation.
+preflight for aspect, collage/labels, subject readability, first-action
+compatibility, and off-frame reveal risk. Optional SSIM/PSNR comparison is
+technical evidence, not automatic approval. First-frame QC, boundary analysis,
+locked story anchors, and previous user acceptance gate dependent generation.
+The prompt exit state remains the default; an end image constrains only a simple
+exact-arrival transition and does not guarantee pixel-identical arrival.
 
 ### Resume long productions safely
 
@@ -147,8 +152,11 @@ Visible dialogue starts from a clean locked ElevenLabs V3 conditioning reference
 Before generation, the agent records the intended voice, ambience, synchronized
 effects, music state, and excluded sounds in one compact Seedance brief. Seedance
 then generates picture and complete production sound together; a QC-passed native
-track is preserved without creative post-production overdubs. Off-screen
-narration and no-dialogue post-only shots keep their separate finishing routes.
+track is preserved without creative post-production overdubs. This is also the
+default for no-dialogue shots that need ambience, effects, or music. Post-only
+sound rebuilding is a user-approved repair exception; off-screen narration keeps
+its separate finishing route. An ElevenLabs V3 file is conditioning guidance,
+not a promise of sample-identical timing, timbre, or fidelity.
 
 ## Production flow
 
@@ -200,12 +208,12 @@ Windows and other environments where symlink permissions vary.
 
 ## Update
 
-Re-run the same automatic install command. Then start a new agent session:
+Use the Skills CLI update command, then start a new agent session:
 
 <!-- markdownlint-disable MD013 -->
 
 ```bash
-npx --yes skills@latest add volition79/sonol-higgsfield --skill sonol-higgsfield --global --agent codex --agent claude-code --copy --yes
+npx --yes skills@latest update sonol-higgsfield --global --yes
 ```
 
 <!-- markdownlint-enable MD013 -->
@@ -248,3 +256,5 @@ tests/         Deterministic workflow and contract tests
   exceed the remaining ceiling and cannot be reversed.
 - OCR, transcript, and automated checks are evidence, not substitutes for
   human visual, editorial, and continuity review.
+- ElevenLabs V3 and start/end images are generative conditioning inputs; they
+  improve control but do not guarantee the original waveform or exact pixels.

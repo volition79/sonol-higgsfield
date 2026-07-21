@@ -98,6 +98,7 @@ BOUNDARY_STRATEGIES = {
 }
 KEYFRAME_ROLES = {"start_image", "end_image", "image_reference", "analysis_only", "none"}
 AUDIO_ROUTES = {
+    "NO_DIALOGUE_NATIVE_SOUND",
     "NO_DIALOGUE_POST",
     "INTENTIONAL_SILENCE",
     "OFFSCREEN_NARRATION",
@@ -1607,6 +1608,29 @@ def audio_plan_errors(shot: dict[str, Any]) -> list[str]:
             errors.append("off-screen narration must require a final external mix")
     if route == "NO_DIALOGUE_POST" and audio.get("final_mix_required") is not True:
         errors.append("no-dialogue post route must require a final external mix")
+    if route == "NO_DIALOGUE_NATIVE_SOUND":
+        if audio.get("has_visible_dialogue") is not False:
+            errors.append("no-dialogue native-sound route must declare has_visible_dialogue=false")
+        if audio_mode != "native_sfx":
+            errors.append("no-dialogue native-sound route must use audio_mode=native_sfx")
+        if (shot.get("references") or {}).get("audios"):
+            errors.append("no-dialogue native-sound route must not carry audio_references")
+        if audio.get("generated_track_policy") != "PRESERVE":
+            errors.append("no-dialogue native-sound route must preserve the Seedance native track")
+        if audio.get("final_mix_required") is not False:
+            errors.append("no-dialogue native-sound route must not require a creative external mix")
+        errors.extend(
+            "no-dialogue native sound " + message
+            for message in cinematography.validate_sound_design(
+                (shot.get("seedance_plan") or {}).get("sound_design"), require_complete=True
+            )
+        )
+        if not cinematography.is_no_dialogue_brief(
+            ((shot.get("seedance_plan") or {}).get("sound_design") or {}).get("dialogue")
+        ):
+            errors.append(
+                "no-dialogue native sound requires sound_design.dialogue to explicitly say none or no dialogue"
+            )
     if route == "INTENTIONAL_SILENCE" and audio.get("final_mix_required") is not False:
         errors.append("intentional silence must not require a final external mix")
     if route == "VISIBLE_DIALOGUE_V3_REFERENCE_NATIVE_AUDIO":

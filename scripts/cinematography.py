@@ -296,7 +296,7 @@ def validate_sound_design(value: Any, *, require_complete: bool = False) -> list
         if item is not None and (not isinstance(item, str) or not item.strip()):
             errors.append(f"sound_design.{key} must be a non-empty string or null")
         if require_complete and (not isinstance(item, str) or not item.strip()):
-            errors.append(f"visible dialogue requires sound_design.{key}")
+            errors.append(f"complete native sound requires sound_design.{key}")
     for key, maximum in (("synchronized_effects", 3), ("exclusions", 4)):
         items = value.get(key)
         if not isinstance(items, list) or any(not isinstance(item, str) or not item.strip() for item in items):
@@ -306,14 +306,28 @@ def validate_sound_design(value: Any, *, require_complete: bool = False) -> list
     return errors
 
 
+NO_DIALOGUE_BRIEFS = {"none", "no dialogue", "no spoken dialogue", "무대사", "대사 없음"}
+
+
+def is_no_dialogue_brief(value: Any) -> bool:
+    """Return whether a compact sound brief explicitly forbids spoken dialogue."""
+    return isinstance(value, str) and value.strip().casefold() in NO_DIALOGUE_BRIEFS
+
+
 def seedance_audio_prompt(plan: dict[str, Any]) -> str:
     """Render one compact audio clause without pretending references are pass-through."""
     mode = plan["audio_mode"]
-    if mode != "audio_reference":
+    if mode not in {"audio_reference", "native_sfx"}:
         return f"Audio: {mode}"
     sound = plan["sound_design"]
     effects = "; ".join(sound["synchronized_effects"]) or "none"
     exclusions = "; ".join(sound["exclusions"]) or "none"
+    if mode == "native_sfx":
+        return (
+            f"Audio: no visible or spoken dialogue; ambience: {sound['ambience']}; "
+            f"synchronized effects: {effects}; music: {sound['music']}; exclude: {exclusions}; "
+            "generate the complete production sound with the picture and keep the native rendered track"
+        )
     return (
         "Audio: use the supplied ElevenLabs V3 dialogue reference as guidance for voice, "
         f"performance, pronunciation, timing, and lip movement; dialogue: {sound['dialogue']}; "
@@ -764,8 +778,14 @@ def _seedance_native_params(
     if audio_mode not in {"none", "native_sfx", "native_dialogue", "audio_reference", "post_only"}:
         raise CinematographyError(f"invalid Seedance audio mode: {audio_mode}")
     sound_errors = validate_sound_design(
-        merged.get("sound_design"), require_complete=audio_mode == "audio_reference"
+        merged.get("sound_design"), require_complete=audio_mode in {"audio_reference", "native_sfx"}
     )
+    if audio_mode == "native_sfx" and not is_no_dialogue_brief(
+        (merged.get("sound_design") or {}).get("dialogue")
+    ):
+        sound_errors.append(
+            "native_sfx requires sound_design.dialogue to explicitly say none or no dialogue"
+        )
     if sound_errors:
         raise CinematographyError("invalid Seedance sound design:\n- " + "\n- ".join(sound_errors))
     image_policy_errors = validate_image_input_policy(merged.get("image_input_policy"))

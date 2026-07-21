@@ -11,7 +11,7 @@ orchestration supplied by this skill.
 | Image generation/reference inputs | Native models | Model routing | Likely, not assumed | Versioned asset plan, OCR and user lock |
 | Video generation/start/end/multi-reference | Native models including current Seedance contracts | Seedance routing | Likely, not assumed | Per-shot board, reference packing, job ledger |
 | Provider job wait/get/list | Native CLI | Execution guidance | Unknown until schema visible | Resume protocol and deterministic job IDs |
-| Native generated audio | Model-dependent | Routing guidance | Model-dependent | Shot-level audio classification |
+| Native generated audio | Model-dependent | Routing guidance | Model-dependent | Complete no-dialogue/native-dialogue sound briefs, preservation gates, and explicit post-only exceptions |
 | Voice change | Live workflow exists | Route when requested | Unknown until schema visible | Not used as cleanup or stem separation |
 | TTS/audio/music | Native current audio models | Model routing | Unknown until schema visible | V3 dialogue conditioning reference, Seedance native production audio, separate narration/post-only routes |
 | Speech transcript | Current data models | Optional QC route | Unknown until schema visible | Evidence ledger; not treated as pronunciation proof |

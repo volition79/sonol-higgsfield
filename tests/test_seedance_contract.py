@@ -27,6 +27,11 @@ class SeedanceContractTests(unittest.TestCase):
     def audio_reference_plan(self) -> dict:
         return {"audio_mode": "audio_reference", "sound_design": self.sound_design()}
 
+    def native_sound_plan(self) -> dict:
+        sound = self.sound_design()
+        sound["dialogue"] = "none"
+        return {"audio_mode": "native_sfx", "sound_design": sound}
+
     def grammar(self, duration: float = 5) -> dict:
         return cine.recommend(
             "주인공이 단서를 발견한다",
@@ -70,12 +75,28 @@ class SeedanceContractTests(unittest.TestCase):
             with self.subTest(mode=mode):
                 references = {"start": "start.png"}
                 plan = {"audio_mode": mode}
+                if mode == "native_sfx":
+                    plan = self.native_sound_plan()
                 if mode == "audio_reference":
                     references = {"start": "start.png", "audios": ["voice.wav"]}
                     plan = self.audio_reference_plan()
                 compiled = self.compile(seedance_plan=plan, references=references)
                 self.assertTrue(compiled["native_params"]["generate_audio"])
         self.assertFalse(self.compile(seedance_plan={"audio_mode": "post_only"})["native_params"]["generate_audio"])
+
+    def test_native_sound_requires_and_compiles_the_whole_soundscape(self) -> None:
+        with self.assertRaisesRegex(cine.CinematographyError, "sound_design.ambience"):
+            self.compile(seedance_plan={"audio_mode": "native_sfx"})
+        contradictory = self.native_sound_plan()
+        contradictory["sound_design"]["dialogue"] = "a man says hello"
+        with self.assertRaisesRegex(cine.CinematographyError, "explicitly say none"):
+            self.compile(seedance_plan=contradictory)
+        compiled = self.compile(seedance_plan=self.native_sound_plan())
+        self.assertTrue(compiled["native_params"]["generate_audio"])
+        self.assertIn("no visible or spoken dialogue", compiled["prompt"])
+        self.assertIn("quiet rooftop wind", compiled["prompt"])
+        self.assertIn("soft glass touch", compiled["prompt"])
+        self.assertIn("keep the native rendered track", compiled["prompt"])
 
     def test_minimum_sufficient_image_inputs_and_live_boundaries_are_enforced(self) -> None:
         bad_cases = [

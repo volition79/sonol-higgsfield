@@ -16,7 +16,8 @@ Use `controlled_single_shot` unless the user explicitly accepts an experimental
 multi-shot generation. Start image-to-video with a sharp, front-facing,
 well-lit image when possible. Prototype at 720p, eight seconds or less, and use
 an explicit audio mode. Compile `generate_audio=false` for post-only or silent
-routes. For approved visible dialogue, use `audio_mode=audio_reference`,
+routes. For no visible dialogue with production sound, use
+`audio_mode=native_sfx`; for approved visible dialogue, use `audio_mode=audio_reference`,
 `generate_audio=true`, a locked ElevenLabs V3 reference, and a complete compact
 sound brief. Review the entire clip, especially seconds five through eight.
 Change one variable per iteration.
@@ -126,8 +127,11 @@ model, not a remembered prose count.
 
 Choose exactly one `audio_mode`:
 
-- `post_only`: default; generate picture without audio and construct all
-  non-dialogue, narration, ambience, effects, and music during finishing;
+- `native_sfx`: Sonol default when nobody visibly speaks; require a complete
+  brief with dialogue=`none`, ambience, synchronized effects, music state, and
+  exclusions, then preserve the QC-passed rendered track;
+- `post_only`: off-screen narration or a user-approved repair exception;
+  generate picture without audio and construct only the authorized stems;
 - `none`: only for an intentionally silent final shot;
 - `audio_reference`: only for visible dialogue after a clean ElevenLabs
   `eleven_v3` conditioning reference is locked; at least one audio and one
@@ -135,8 +139,7 @@ Choose exactly one `audio_mode`:
   `synchronized_effects`, `music`, and `exclusions` before compilation. Generate
   the full production sound with the picture and preserve the rendered track
   when it passes QC;
-- `native_sfx` and `native_dialogue`: compiler-compatible but outside the Sonol
-  production policy.
+- `native_dialogue`: compiler-compatible but outside the Sonol production policy.
 
 The live contract currently defaults `generate_audio` to true. Every execution
 command must therefore include the compiler's explicit boolean. Do

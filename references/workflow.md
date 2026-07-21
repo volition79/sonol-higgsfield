@@ -50,7 +50,8 @@ versioned `LOCKED_FOR_VIDEO` assets.
 Exit per shot only after boundary strategy, the reviewed start image, selected
 image-input profile (start-only by default; one evidenced essential reference
 or motivated-transition end image only as an exception), prompt, duration, model, audio plan,
-continuity handoff, and provider-compiled cinematography grammar are approved
+continuity handoff, a complete compact brief for native production sound, and
+provider-compiled cinematography grammar are approved
 and locked. Board a shot only when its start image exists — for chained shots
 that means after the previous shot is accepted. Board approval is version-specific. Any grammar change
 returns the board to `DRAFT`, increments the generation version, and resets QC.
@@ -72,9 +73,10 @@ dependent generation or stale/pre-produced cut/reset start images.
 
 Exit only after technical, transcript, lip-sync/manual, visual, cinematography,
 continuity, and user review checks are passed or explicitly not applicable. For
-visible dialogue, preserve the accepted native production track and do not add
-creative stems by default. Apply external audio only to its authorized
-post-only route or an approved repair exception, then grade and probe the export.
+native sound, preserve the accepted production track and do not add creative
+stems by default. Apply external audio only to off-screen narration, a
+user-approved post-only route, or an approved repair exception, then grade and
+probe the export.
 
 ## Resume protocol
 
