@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import stat
 import sys
 import tempfile
@@ -14,7 +15,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import project_state as state  # noqa: E402
 import run_shot  # noqa: E402
 import cinematography  # noqa: E402
-import execution_contract  # noqa: E402
 from test_cinematography import seedance_snapshot  # noqa: E402
 
 
@@ -53,22 +53,8 @@ class ProductionStateTests(unittest.TestCase):
         state.lock_requirements(self.production, "user")
 
     def approve_current_shot_cost(self, credits: float = 2.5, ceiling: float = 3.0) -> None:
-        shot = state.read_json(state.data_dir(self.production) / "shots.json")["items"][0]
-        execution = shot["generation"]["execution"]
-        fingerprint = execution_contract.fingerprint(execution["mode"], execution["argv"])
-        state.set_cost_scenario(self.production, "recommended", credits, "agent")
-        state.replace_task_estimates(
-            self.production,
-            [{
-                "shot_id": shot["id"],
-                "scenario": "recommended",
-                "credits": credits,
-                "argv": execution["argv"],
-                "execution_fingerprint": fingerprint,
-            }],
-            "agent",
-        )
-        state.approve_cost(self.production, "recommended", ceiling, "user")
+        del credits
+        state.approve_budget(self.production, ceiling, "user")
 
     def add_locked_asset(self) -> None:
         state.add_asset(self.production, "CHAR_001", "character", "Hero")
@@ -100,6 +86,7 @@ class ProductionStateTests(unittest.TestCase):
             invariants=["same face and wardrobe"],
             live_schema=self.live_schema,
             seedance_plan={"aspect_ratio": "16:9", "resolution": "720p"},
+            references={"start": "media/images/SHOT_001_start.png"},
         )
         argv = ["seedance_2_0", "--prompt", compiled["prompt"]]
         for key, value in compiled["native_params"].items():
@@ -109,9 +96,19 @@ class ProductionStateTests(unittest.TestCase):
             {
                 "duration_seconds": 5,
                 "continuity": continuity,
+                "boundary": {
+                    "strategy": "scene_reset",
+                    "inherit_previous_last_frame": False,
+                    "planned_keyframe": "media/images/SHOT_001_start.png",
+                    "planned_keyframe_role": "start_image",
+                    "cut_type": "opening",
+                    "reason": "first shot establishes a new scene",
+                },
+                "references": {"start": "media/images/SHOT_001_start.png"},
                 "required_asset_ids": ["CHAR_001"],
+                "audio": {"route": "NO_DIALOGUE_POST", "has_visible_dialogue": False},
                 "model": "seedance_2_0",
-                "seedance_plan": {"aspect_ratio": "16:9", "resolution": "720p"},
+                "seedance_plan": {"aspect_ratio": "16:9", "resolution": "720p", "audio_mode": "post_only"},
                 "execution": {"mode": "model", "argv": argv},
                 "shot_grammar": cinematography.apply_compilation(grammar, compiled),
             },
@@ -139,16 +136,17 @@ class ProductionStateTests(unittest.TestCase):
         self.assertEqual(project["requirements_lock"]["status"], "LOCKED")
         self.assertEqual(project["project"]["aspect_ratio"], "16:9")
 
-    def test_cost_approval_requires_locked_requirements_and_user(self) -> None:
-        state.set_cost_scenario(self.production, "recommended", 2, "agent")
+    def test_budget_approval_requires_locked_requirements_and_user(self) -> None:
         with self.assertRaisesRegex(state.StateError, "requirements must be locked"):
-            state.approve_cost(self.production, "recommended", 2, "user")
+            state.approve_budget(self.production, 2, "user")
         self.confirm_requirements()
         state.lock_requirements(self.production, "user")
         with self.assertRaisesRegex(state.StateError, "only the user"):
-            state.approve_cost(self.production, "recommended", 2, "agent")
-        with self.assertRaisesRegex(state.StateError, "below"):
-            state.approve_cost(self.production, "recommended", 1, "user")
+            state.approve_budget(self.production, 2, "agent")
+        state.approve_budget(self.production, 2, "user")
+        approval = state.read_json(state.data_dir(self.production) / "project.json")["cost_approval"]
+        self.assertEqual(approval["mode"], "PROJECT_CEILING")
+        self.assertTrue(approval["unpriced_job_risk_acknowledged"])
 
     def test_korean_asset_ocr_and_version_specific_approval(self) -> None:
         state.add_asset(self.production, "TEXT_001", "graphic", "Title")
@@ -196,23 +194,81 @@ class ProductionStateTests(unittest.TestCase):
         with self.assertRaisesRegex(state.StateError, "required asset is not locked"):
             state.transition_generation(self.production, "SHOT_001", "QUEUED", "agent")
 
-    def test_guarded_paid_runner_uses_exact_approved_estimate(self) -> None:
+    def test_continuous_boundary_requires_previous_frame_as_start_image(self) -> None:
+        self.lock_and_budget()
+        self.add_locked_asset()
+        self.add_locked_shot()
+        with self.assertRaisesRegex(state.StateError, "previous_shot_id"):
+            state.set_boundary(
+                self.production,
+                "SHOT_001",
+                "continuous_match",
+                "agent",
+                reason="same action and camera axis continue",
+            )
+        state.set_boundary(
+            self.production,
+            "SHOT_001",
+            "continuous_match",
+            "agent",
+            reason="same action and camera axis continue",
+            previous_shot_id="SHOT_000",
+            previous_frame="media/images/SHOT_000_end.png",
+            planned_keyframe="media/images/SHOT_001_keyframe.png",
+        )
+        shot = state.read_json(state.data_dir(self.production) / "shots.json")["items"][0]
+        self.assertEqual(state.boundary_plan_errors(shot), [])
+        self.assertEqual(shot["references"]["start"], "media/images/SHOT_000_end.png")
+        self.assertNotIn("media/images/SHOT_001_keyframe.png", shot["references"].get("images", []))
+        self.assertEqual(shot["boundary"]["planned_keyframe_role"], "analysis_only")
+
+    def test_visible_dialogue_requires_locked_eleven_v3_master(self) -> None:
+        self.add_locked_asset()
+        self.add_locked_shot()
+        state.update_shot(
+            self.production,
+            "SHOT_001",
+            {
+                "audio": {
+                    "route": "VISIBLE_DIALOGUE_ELEVENLABS_V3",
+                    "has_visible_dialogue": True,
+                    "voice_provider": "elevenlabs",
+                    "voice_model": "eleven_v3",
+                    "dialogue_master_path": "media/audio/dialogue.wav",
+                    "discard_generated_track": True,
+                    "final_mix_required": True,
+                },
+                "references": {"audios": ["media/audio/dialogue.wav"], "start": "hero.png"},
+                "seedance_plan": {"audio_mode": "audio_reference"},
+            },
+            "agent",
+        )
+        shot = state.read_json(state.data_dir(self.production) / "shots.json")["items"][0]
+        self.assertEqual(state.audio_plan_errors(shot), [])
+
+    def test_guarded_paid_runner_uses_budget_without_live_quote(self) -> None:
         self.lock_and_budget()
         self.add_locked_asset()
         self.add_locked_shot()
         self.approve_current_shot_cost()
         state.transition_generation(self.production, "SHOT_001", "READY", "agent")
-        fake = Path(self.temp.name) / "fake-higgsfield"
+        script = Path(self.temp.name) / "fake_higgsfield.py"
         contract = self.live_schema["model_contracts"]["seedance_2_0"]
-        fake.write_text(
+        script.write_text(
             "#!/usr/bin/env python3\nimport json,sys\n"
             f"contract={json.dumps(contract)!r}\n"
+            "assert 'cost' not in sys.argv, 'live cost endpoint must not be called'\n"
             "if 'account' in sys.argv: print(json.dumps({'credits': 100}))\n"
             "elif 'get' in sys.argv: print(contract)\n"
             "else: print(json.dumps({'job_id':'job-001','credits':2.5}))\n",
             encoding="utf-8",
         )
-        fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
+        if os.name == "nt":
+            fake = Path(self.temp.name) / "fake-higgsfield.cmd"
+            fake.write_text(f'@echo off\r\n"{sys.executable}" "{script}" %*\r\n', encoding="utf-8")
+        else:
+            fake = script
+            fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
         result = run_shot.run_paid(self.production, "SHOT_001", str(fake), False, 30)
         self.assertEqual(result["job_id"], "job-001")
         self.assertTrue(result["actual_credits_recorded"])
@@ -220,27 +276,27 @@ class ProductionStateTests(unittest.TestCase):
         self.assertEqual(aggregate["shots"][0]["generation"]["status"], "GENERATED")
         self.assertEqual(aggregate["costs"]["actual"]["credits"], 2.5)
 
-    def test_guarded_paid_runner_rejects_quote_execution_drift_before_provider_call(self) -> None:
+    def test_guarded_paid_runner_rejects_exhausted_project_ceiling(self) -> None:
         self.lock_and_budget()
         self.add_locked_asset()
         self.add_locked_shot()
-        self.approve_current_shot_cost()
-        costs_path = state.data_dir(self.production) / "costs.json"
-        costs = state.read_json(costs_path)
-        costs["task_estimates"][0]["execution_fingerprint"] = execution_contract.fingerprint(
-            "model", ["seedance_2_0", "--prompt", "different"]
-        )
-        state.atomic_write_json(costs_path, costs, backup=False)
+        self.approve_current_shot_cost(ceiling=2)
+        state.record_actual_cost(self.production, "PRIOR", 2, "agent", "job-prior")
         state.transition_generation(self.production, "SHOT_001", "READY", "agent")
-        with self.assertRaisesRegex(state.StateError, "quote does not match"):
+        with self.assertRaisesRegex(state.StateError, "ceiling is exhausted"):
             run_shot.run_paid(self.production, "SHOT_001", "/provider/must/not/run", False, 30)
 
-    def test_provider_job_id_never_accepts_unrelated_id(self) -> None:
-        self.assertIsNone(run_shot.provider_job_id({"id": "asset-001"}))
-        self.assertIsNone(run_shot.provider_job_id({"data": {"id": "asset-001"}}))
+    def test_provider_job_id_accepts_only_known_envelopes(self) -> None:
+        # The live hf CLI returns job objects (or a list of them) whose
+        # identifier key is a plain "id"; non-dict payloads are rejected.
+        self.assertEqual(run_shot.provider_job_id({"id": "job-001"}), "job-001")
+        self.assertEqual(run_shot.provider_job_id([{"id": "job-001"}]), "job-001")
         self.assertEqual(run_shot.provider_job_id({"data": {"job_id": "job-001"}}), "job-001")
+        self.assertIsNone(run_shot.provider_job_id("job-001"))
+        self.assertIsNone(run_shot.provider_job_id(["job-001"]))
+        self.assertIsNone(run_shot.provider_job_id({"credits": 5}))
 
-    def test_requirement_change_invalidates_lock_and_cost(self) -> None:
+    def test_requirement_change_unlocks_requirements_but_preserves_ceiling(self) -> None:
         self.lock_and_budget()
         self.add_locked_asset()
         self.add_locked_shot()
@@ -249,10 +305,10 @@ class ProductionStateTests(unittest.TestCase):
         project = state.read_json(state.data_dir(self.production) / "project.json")
         costs = state.read_json(state.data_dir(self.production) / "costs.json")
         self.assertEqual(project["requirements_lock"]["status"], "UNLOCKED")
-        self.assertEqual(project["cost_approval"]["status"], "UNAPPROVED")
-        self.assertEqual(costs["task_estimates"], [])
+        self.assertEqual(project["cost_approval"]["status"], "APPROVED")
+        self.assertEqual(costs["reference_estimates"]["status"], "STALE")
 
-    def test_cost_impacting_shot_change_invalidates_quote_and_approval(self) -> None:
+    def test_execution_change_invalidates_reference_only_not_ceiling(self) -> None:
         self.lock_and_budget()
         self.add_locked_asset()
         self.add_locked_shot()
@@ -260,9 +316,8 @@ class ProductionStateTests(unittest.TestCase):
         state.update_shot(self.production, "SHOT_001", {"duration_seconds": 6}, "agent")
         project = state.read_json(state.data_dir(self.production) / "project.json")
         costs = state.read_json(state.data_dir(self.production) / "costs.json")
-        self.assertEqual(project["cost_approval"]["status"], "UNAPPROVED")
-        self.assertEqual(project["cost_approval"]["task_contracts"], {})
-        self.assertEqual(costs["task_estimates"], [])
+        self.assertEqual(project["cost_approval"]["status"], "APPROVED")
+        self.assertEqual(costs["reference_estimates"]["status"], "STALE")
 
     def test_actual_cost_cannot_exceed_ceiling(self) -> None:
         self.lock_and_budget()

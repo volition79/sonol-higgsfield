@@ -30,7 +30,8 @@ them `CONFIRMED` on the user's behalf.
   already available and authorized, or should approved image references be used?
 - Which Korean words, logos, labels, numbers, or legal lines must appear exactly?
 - Which supplied media may be uploaded to Higgsfield and which must remain local?
-- Is generated native audio acceptable, or is a named/consistent voice required?
+- Which shots have visible dialogue, which have off-screen narration, and which
+  need only post-produced ambience/effects/music?
 - What may never change between shots: face, costume, product, location, color,
   logo, prop state, direction of motion, or camera axis?
 - Who can approve requirements, costs, assets, shot boards, and final output?
@@ -57,4 +58,3 @@ python3 scripts/sonol_higgsfield.py set-requirement ./production \
 python3 scripts/sonol_higgsfield.py set-requirement ./production \
   aspect_ratio '"9:16"' --status INFERRED --source "TikTok placement"
 ```
-

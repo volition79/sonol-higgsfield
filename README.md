@@ -75,6 +75,8 @@ For the complete production workflow, also provide:
 - Tesseract with Korean (`kor`) language data when Korean text OCR is required
 - An active Higgsfield account, selected workspace, and enough credits for the
   generation you approve
+- An ElevenLabs API key and approved voice IDs when visible dialogue or external
+  narration is required
 - Optional Higgsfield MCP access; the skill treats the live CLI schema as the
   canonical execution contract and does not require MCP
 
@@ -89,8 +91,9 @@ Official setup references:
 ### Make a film, not isolated clips
 
 The skill carries story state, characters, locations, props, camera direction,
-audio, and edit handoffs from shot to shot. Each shot has a stable ID, expected
-entry state, exit state, references, and splice points.
+audio, and edit handoffs from shot to shot. A director boundary decision chooses
+whether to inherit the accepted previous last frame, build a start/end bridge,
+make an editorial cut, or reset the scene. It never forces morphing across a cut.
 
 ### Turn plain intent into film language
 
@@ -99,12 +102,13 @@ or “follow her without losing spatial clarity.” The skill searches a catalog
 148 film techniques, proposes explainable camera and directing alternatives,
 and compiles the chosen grammar for the selected live provider.
 
-### Control credits before generation
+### Keep credit planning fast
 
 The agent checks the live model contract, account credits, workspace, reference
-limits, and cost estimate before a paid request. Requirements, assets, shots,
-and the credit ceiling move through explicit approval gates. Silence never
-counts as approval.
+limits, and one user-approved project ceiling. It does not make slow live cost
+calls or build three quote scenarios. When matching actual jobs exist, it shows
+clearly labeled reference arithmetic from observed credits per second; otherwise
+it says the estimate is unavailable. Silence never counts as approval.
 
 ### Keep Seedance 2.0 disciplined
 
@@ -128,8 +132,9 @@ than restarting the entire film.
 ### Treat Korean text and audio as production concerns
 
 Korean text assets can pass through OCR evidence and human visual review.
-Dialogue, narration, ambience, effects, and music use explicit routing instead
-of assuming every generated clip should keep or replace its original audio.
+Visible dialogue starts from a locked ElevenLabs V3 master used as the Seedance
+audio reference; the rendered track is removed and the untouched master returns
+in the final mix. Narration, ambience, Foley, effects, and music remain separate.
 
 ## Production flow
 
@@ -137,7 +142,7 @@ of assuming every generated clip should keep or replace its original audio.
 2. Create the persistent production state and dashboard.
 3. Write a timecoded script, scenes, assets, and shot plan.
 4. Choose and validate film grammar for each shot.
-5. Inspect the live Higgsfield schema, credits, and cost.
+5. Inspect the live Higgsfield schema and credits, then approve a project ceiling.
 6. Approve animatics and references.
 7. Generate one bounded shot at a time.
 8. Review continuity, audio, text, and technical quality immediately.
@@ -149,8 +154,8 @@ of assuming every generated clip should keep or replace its original audio.
 After opening a new agent session, ask naturally:
 
 > Use sonol-higgsfield to plan a 60-second cinematic brand film. Interview me
-> first, show the storyboard and cost estimate, and do not run paid generation
-> until I approve it.
+> first, show the storyboard and project credit ceiling, and do not run paid
+> generation until I approve it.
 
 Or:
 
@@ -224,7 +229,8 @@ tests/         Deterministic workflow and contract tests
   rendered result.
 - MCP capabilities are used only when their live tool schema is visible in the
   current session.
-- Paid Higgsfield jobs consume credits; this skill requires explicit approval
-  but cannot reverse a submitted provider job.
+- Paid Higgsfield jobs consume credits. This skill uses a user-approved project
+  ceiling but intentionally skips exact live quotes, so one submitted job can
+  exceed the remaining ceiling and cannot be reversed.
 - OCR, transcript, and automated checks are evidence, not substitutes for
   human visual, editorial, and continuity review.

@@ -13,7 +13,7 @@ Split state files:
 - `assets.json`: versioned images, characters, products, props, locations.
 - `scenes.json`: ordered scene plan.
 - `shots.json`: board, structured cinematography grammar, continuity, generation, audio, and QC state.
-- `costs.json`: scenarios, task quotes, approved/actual ledger.
+- `costs.json`: reference-only arithmetic and actual-credit ledger.
 - `history.json`: append-only mutation events.
 
 Atomic writes preserve a one-generation `.bak` file for recovery. The dashboard
@@ -23,12 +23,12 @@ does not contain credentials or OAuth state.
 
 - Project identity and final completion gauge.
 - Total/grammar-ready/generated/QC/final shot metrics.
-- Approval queue for requirements, costs, assets, and shot boards.
+- Approval queue for requirements, project ceiling, assets, and shot boards.
 - Active interlocks and blockers.
 - Shot table with board, grammar and generation state, model, QC count, version.
 - Per-shot grammar cards with intent, core camera choices, rationale, provider and support level.
 - Asset version/lock/OCR state.
-- Three scenario estimates, actual credits, approved ceiling.
+- Reference-only arithmetic coverage, actual credits, approved project ceiling.
 - Reverse chronological history.
 
 ## Running

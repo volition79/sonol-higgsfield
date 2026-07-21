@@ -102,10 +102,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
         action = payload["action"]
         if action == "lock_requirements":
             state.lock_requirements(self.production, "user")
-        elif action == "approve_cost":
-            state.approve_cost(
+        elif action == "approve_budget":
+            state.approve_budget(
                 self.production,
-                str(payload["scenario"]),
                 self.numeric(payload["max_credits"], "max_credits"),
                 "user",
             )

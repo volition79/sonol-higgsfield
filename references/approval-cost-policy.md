@@ -5,7 +5,7 @@
 The agent may draft, inspect, estimate, and pass internal QC. Only the user may:
 
 - lock the consolidated requirements;
-- approve a cost scenario and maximum credits;
+- approve one project credit ceiling and acknowledge execution without exact live quotes;
 - approve or lock an asset version;
 - approve or lock a shot-board version;
 - pass `user_review` QC.
@@ -16,8 +16,9 @@ preferences are not approval.
 ## Requirement gate
 
 All fourteen required fields must be `CONFIRMED`. Locking records actor, time,
-and version. Any later change unlocks requirements and invalidates cost
-approval, because scope and price may have changed.
+and version. A later change unlocks requirements and invalidates reference-only
+arithmetic. The approved project ceiling remains a total limit; generation is
+still blocked while requirements are unlocked.
 
 ## Asset gate
 
@@ -36,9 +37,9 @@ The board uses the same approval flow and a version number. A planning change
 invalidates approval, clears provider job/result fields, resets QC, and removes
 the version from the final timeline.
 
-Generation cannot queue until requirements and cost are approved, the shot
-board is locked, every required asset is locked, and all eight continuity
-fields are filled.
+Generation cannot queue until requirements and the project ceiling are
+approved, the shot board is locked, every required asset is locked, and all
+eight continuity fields, boundary strategy, and audio route are resolved.
 
 ## Generation and QC gate
 
@@ -49,19 +50,23 @@ only after technical, transcript, lip-sync/manual, visual, continuity, and user
 review checks are `PASSED` or `NOT_APPLICABLE`. Korean pronunciation remains a
 separate recorded check when relevant.
 
-## Cost policy
+## Credit policy
 
-- Quote economy, recommended, and highest-quality using exact live arguments.
-- Show per-shot and total credits, provider/model, duration, resolution, and
-  any media that a quote would upload.
-- Store approved scenario and maximum credits separately from estimates.
-- Bind approval to the normalized per-shot execution fingerprint and reject
-  quote/execution drift before any provider submission.
-- Requote after model, duration, resolution, mode, or reference changes.
-- Seek renewed approval when a fallback can exceed the ceiling.
-- Record job IDs and actual credits after each job.
-- Reject recording actual cost that would exceed the approved ceiling; stop and
-  reconcile provider transactions with the user.
+- Never call `higgsfield generate cost`; remove three-scenario and whole-project live quoting.
+- Ask the user to approve one total project credit ceiling after requirements lock.
+- Explain that without a live quote a single submitted job can exceed the
+  remaining ceiling; the ceiling is a preflight stop, not a provider-side cap.
+- Optionally calculate a reference value from recent matching actual jobs only:
+  mean observed credits per second times duration times planned attempts.
+- Match provider, model/workflow mode, resolution, and generated-audio flag.
+  Report `UNAVAILABLE` when no matching sample exists; do not invent coefficients.
+- Label arithmetic as `REFERENCE_ONLY`, never a quote, exact price, or guarantee.
+- Check current account credits and remaining approved ceiling before every job.
+- Stop for renewed approval when the ceiling is exhausted or the user raises it.
+- Record job IDs, execution profile, and actual credits after each job so later
+  arithmetic can use evidence.
+- If provider-reported actual cost exceeds the ceiling, record reconciliation
+  evidence and stop further jobs.
 - Never invent cash conversion for unknown, free, or promotional credits.
 
 ## Dashboard action safety
@@ -74,4 +79,4 @@ HTML snapshots are read-only and cannot mutate state.
 
 Do not place OAuth tokens, authorization headers, cookies, email, credentials,
 unredacted private URLs, or private media in dashboard state or schema files.
-Ask before uploading any local media to a remote quote or generation command.
+Ask before uploading any local media to a remote generation command.

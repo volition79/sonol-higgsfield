@@ -13,7 +13,7 @@
 
 Exit only when all required requirement fields are `CONFIRMED`, the user has
 reviewed the consolidated specification, and `requirements_lock.status` is
-`LOCKED`. A later requirement change unlocks it and invalidates cost approval.
+`LOCKED`. A later requirement change unlocks it and invalidates reference-only arithmetic.
 
 ### B. Script and plan
 
@@ -23,29 +23,33 @@ eight continuity fields. Keep one camera purpose, one primary action, and one
 primary camera movement per shot. Produce one to three intent-first grammar
 recommendations, record the selected `shot_grammar` and rationale, compile it
 for the live provider contract, and require full grammar validation. Record
-planned edit points.
+planned edit points and one of the four incoming boundary strategies.
 
-### C. Cost
+### C. Credit ceiling
 
-Exit only when the live CLI has quoted all three explicit scenarios and the
-user has approved one scenario and credit ceiling. A scenario is a real set of
-CLI arguments, not a multiplier applied to another quote. Store a canonical
-fingerprint per shot. Approval binds to those fingerprints; any prompt, model,
-duration, resolution, mode, reference, audio, or execution change clears quotes
-and approval.
+Exit only when the user has approved one total project credit ceiling and
+acknowledged that no exact provider quote will be used. Optional arithmetic is
+reference-only and comes from recent matching actual jobs. An execution-profile
+change invalidates that arithmetic but does not silently raise or remove the
+user's total ceiling.
 
 ### D. Assets
 
-Exit only when required character, location, prop, product, graphic, and key
-frame assets have passed internal review and explicit user review. Korean-text
-assets also require OCR evidence. Final video consumes only versioned
-`LOCKED_FOR_VIDEO` assets.
+Exit only when required character, location, prop, product, and graphic assets
+have passed internal review and explicit user review, plus the **first shot's
+start frame only** — later start frames are composed just-in-time during
+generation (chained shots inherit the previous boundary frame; cuts and resets
+compose a new one from the locked references and current story state).
+Korean-text assets also require OCR evidence. Final video consumes only
+versioned `LOCKED_FOR_VIDEO` assets.
 
 ### E. Shot board
 
-Exit per shot only after start/end/reference choices, prompt, duration, model,
-audio plan, continuity handoff, and provider-compiled cinematography grammar are
-approved and locked. Board approval is version-specific. Any grammar change
+Exit per shot only after boundary strategy, the single start image (plus end
+image only for a motivated transition), prompt, duration, model, audio plan,
+continuity handoff, and provider-compiled cinematography grammar are approved
+and locked. Board a shot only when its start image exists — for chained shots
+that means after the previous shot is accepted. Board approval is version-specific. Any grammar change
 returns the board to `DRAFT`, increments the generation version, and resets QC.
 Store the approved provider call and its generated fingerprint as
 `generation.execution = {"mode":"model|workflow","argv":[...],"fingerprint":"sha256:..."}`.
@@ -54,7 +58,10 @@ Store the approved provider call and its generated fingerprint as
 
 Generate one dependent shot at a time. Record the exact job ID, arguments,
 model contract snapshot, result path, and actual credits. Inspect before the
-next shot that depends on its end state.
+next shot that depends on its end state: compare the rendered first frame to
+the submitted start image, extract the sharpest boundary frame from the final
+half second, analyze it, and re-align the next shot's plan to it before
+compiling.
 
 ### G. QC and finish
 
@@ -80,7 +87,7 @@ grade in a deterministic final timeline, then probe the exported file.
 ### Provider command rejected before submission
 
 No credit-bearing job is known. Reinspect the current model/workflow contract,
-correct flags, requote, and record the reason. Do not silently switch model.
+correct flags and record the reason. Do not silently switch model.
 
 ### Submission returned a job ID but waiting failed
 
@@ -93,16 +100,10 @@ Record which check failed and preserve the rejected version. Prefer edit-point,
 audio, or local finishing repairs first. Regenerate only the affected shot or
 bridge and increment its version.
 
-### Cost quote requires uploading local media
+### Credits are exhausted or reference arithmetic exceeds capacity
 
-The estimator blocks this by default because even a quote may upload input.
-Explain the file and purpose, then rerun with `--allow-media-upload` only after
-the user authorizes that upload.
-
-### Credits are lower than the approved scenario
-
-Stop before submission. Offer a newly quoted lower-cost scenario, shorter
-scope, lower resolution, or delayed paid generation. Never translate credits
+Stop before submission. Offer a shorter scope, lower resolution, fewer
+candidates, a renewed project ceiling, or delayed paid generation. Never translate credits
 to cash unless Higgsfield provides an authoritative price for that account.
 
 ## Deliverables
@@ -111,6 +112,6 @@ to cash unless Higgsfield provides an authoritative price for that account.
 - Timecoded script and shot ledger.
 - Approved asset/version list.
 - Model/workflow/job ledger and schema snapshot.
-- Estimated, approved, and actual credits.
+- Reference-only arithmetic, approved ceiling, and actual credits.
 - QC ledger with automated evidence and manual gaps separated.
 - Production dashboard and split JSON state.

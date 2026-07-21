@@ -16,7 +16,7 @@ import cinematography
 import execution_contract
 
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 REQUIRED_REQUIREMENTS = (
     "purpose",
     "core_message",
@@ -89,6 +89,19 @@ GENERATION_TRANSITIONS = {
     "FINAL_COMPLETE": set(),
 }
 QC_STATES = {"PENDING", "PASSED", "FAILED", "MANUAL_REQUIRED", "NOT_APPLICABLE"}
+BOUNDARY_STRATEGIES = {
+    "continuous_match",
+    "motivated_transition",
+    "editorial_cut",
+    "scene_reset",
+}
+KEYFRAME_ROLES = {"start_image", "end_image", "image_reference", "analysis_only", "none"}
+AUDIO_ROUTES = {
+    "NO_DIALOGUE_POST",
+    "INTENTIONAL_SILENCE",
+    "OFFSCREEN_NARRATION",
+    "VISIBLE_DIALOGUE_ELEVENLABS_V3",
+}
 DATA_FILES = (
     "project.json",
     "requirements.json",
@@ -178,6 +191,33 @@ def _base_document() -> dict[str, Any]:
     return {"schema_version": SCHEMA_VERSION, "updated_at": utc_now()}
 
 
+def default_boundary_plan() -> dict[str, Any]:
+    return {
+        "strategy": "UNDECIDED",
+        "previous_shot_id": None,
+        "inherit_previous_last_frame": None,
+        "previous_boundary_frame": None,
+        "planned_keyframe": None,
+        "planned_keyframe_role": "none",
+        "cut_type": None,
+        "reason": None,
+    }
+
+
+def default_audio_plan() -> dict[str, Any]:
+    return {
+        "route": "UNDECIDED",
+        "has_visible_dialogue": None,
+        "voice_provider": None,
+        "voice_model": None,
+        "voice_ids": [],
+        "dialogue_master_path": None,
+        "discard_generated_track": False,
+        "final_mix_required": True,
+        "final_mix_path": None,
+    }
+
+
 def initialize(root: str | Path, name: str, template_dir: Path) -> Path:
     production = _root(root)
     if production.exists() and any(production.iterdir()):
@@ -209,11 +249,11 @@ def initialize(root: str | Path, name: str, template_dir: Path) -> Path:
         },
         "cost_approval": {
             "status": "UNAPPROVED",
-            "scenario": None,
+            "mode": "PROJECT_CEILING",
             "max_credits": None,
             "approved_by": None,
             "approved_at": None,
-            "task_contracts": {},
+            "unpriced_job_risk_acknowledged": False,
         },
     }
     requirements = _base_document() | {
@@ -233,13 +273,15 @@ def initialize(root: str | Path, name: str, template_dir: Path) -> Path:
     shots = _base_document() | {"items": []}
     costs = _base_document() | {
         "currency": "credits",
-        "scenarios": {
-            "economy": {"estimated_credits": None, "approved": False},
-            "recommended": {"estimated_credits": None, "approved": False},
-            "highest_quality": {"estimated_credits": None, "approved": False},
+        "reference_estimates": {
+            "method": "recent_actual_arithmetic",
+            "status": "NOT_COMPUTED",
+            "shots": [],
+            "total_estimated_credits": None,
+            "covered_shots": 0,
+            "total_shots": 0,
         },
-        "task_estimates": [],
-        "actual": {"credits": 0.0, "transactions": []},
+        "actual": {"credits": 0.0, "transactions": [], "reconciliation_required": False, "pending": []},
         "cash_value": {"status": "UNKNOWN", "value": None, "currency": None},
     }
     history = _base_document() | {"events": []}
@@ -266,7 +308,7 @@ def migrate(root: str | Path) -> dict[str, Any]:
     if versions == {SCHEMA_VERSION}:
         return {"migrated": False, "schema_version": SCHEMA_VERSION}
     only_version = next(iter(versions)) if len(versions) == 1 else None
-    if only_version not in {1, 2}:
+    if only_version not in {1, 2, 3}:
         raise StateError(f"cannot migrate mixed or unsupported schema versions: {sorted(versions, key=str)}")
     assert isinstance(only_version, int)
     from_version = only_version
@@ -280,13 +322,42 @@ def migrate(root: str | Path) -> dict[str, Any]:
             binding = shot["shot_grammar"].setdefault("provider_binding", {})
             binding.setdefault("schema_contract_hash", None)
         shot.setdefault("seedance_plan", cinematography.default_seedance_plan())
+        if shot["seedance_plan"].get("audio_mode") == "none":
+            shot["seedance_plan"]["audio_mode"] = "post_only"
         references = shot.setdefault("references", {})
         references.setdefault("manifest", [])
+        shot.setdefault("boundary", default_boundary_plan())
+        audio = shot.setdefault("audio", {})
+        for key, value in default_audio_plan().items():
+            audio.setdefault(key, deepcopy(value))
         generation = shot.setdefault("generation", {})
+        generation.pop("cost_argv", None)
+        generation.pop("cost_options", None)
         execution = generation.setdefault("execution", {"mode": None, "argv": []})
         execution.setdefault("fingerprint", None)
         shot.setdefault("qc", {})["cinematography"] = "PENDING"
-    state["project"].setdefault("cost_approval", {}).setdefault("task_contracts", {})
+    approval = state["project"].setdefault("cost_approval", {})
+    approval.pop("scenario", None)
+    approval.pop("task_contracts", None)
+    approval.setdefault("mode", "PROJECT_CEILING")
+    approval.setdefault("unpriced_job_risk_acknowledged", approval.get("status") == "APPROVED")
+    costs = state["costs"]
+    costs.pop("scenarios", None)
+    costs.pop("task_estimates", None)
+    costs.setdefault(
+        "reference_estimates",
+        {
+            "method": "recent_actual_arithmetic",
+            "status": "NOT_COMPUTED",
+            "shots": [],
+            "total_estimated_credits": None,
+            "covered_shots": 0,
+            "total_shots": len(state["shots"].get("items", [])),
+        },
+    )
+    actual = costs.setdefault("actual", {"credits": 0.0, "transactions": []})
+    actual.setdefault("reconciliation_required", False)
+    actual.setdefault("pending", [])
     for name, document in state.items():
         document["schema_version"] = SCHEMA_VERSION
         document["updated_at"] = utc_now()
@@ -303,52 +374,25 @@ def _find(items: Iterable[dict[str, Any]], entity_id: str, kind: str) -> dict[st
     raise StateError(f"unknown {kind}: {entity_id}")
 
 
-def invalidate_cost_approval(root: str | Path, actor: str, reason: str) -> None:
-    """Clear quotes and approval when a planned paid command can change."""
-    project_path = data_dir(root) / "project.json"
+def invalidate_reference_estimates(root: str | Path, actor: str, reason: str) -> None:
+    """Clear arithmetic guidance when a planned execution profile changes.
+
+    The user-approved project ceiling remains intact because it is a total spend
+    limit, not approval of an exact provider quote.
+    """
     costs_path = data_dir(root) / "costs.json"
-    project = read_json(project_path)
     costs = read_json(costs_path)
-    project.setdefault("cost_approval", {}).update(
-        {
-            "status": "UNAPPROVED",
-            "scenario": None,
-            "max_credits": None,
-            "approved_by": None,
-            "approved_at": None,
-            "task_contracts": {},
-        }
-    )
-    for scenario in costs.get("scenarios", {}).values():
-        scenario.update({"estimated_credits": None, "approved": False})
-    costs["task_estimates"] = []
-    project["updated_at"] = utc_now()
+    costs["reference_estimates"] = {
+        "method": "recent_actual_arithmetic",
+        "status": "STALE",
+        "shots": [],
+        "total_estimated_credits": None,
+        "covered_shots": 0,
+        "total_shots": len(read_json(data_dir(root) / "shots.json").get("items", [])),
+    }
     costs["updated_at"] = utc_now()
-    atomic_write_json(project_path, project)
     atomic_write_json(costs_path, costs)
-    append_history(root, "cost_approval_invalidated", actor, "cost", "production", {"reason": reason})
-
-
-def revoke_cost_approval(root: str | Path, actor: str, reason: str) -> None:
-    """Revoke approval while retaining newly refreshed quote evidence."""
-    project_path = data_dir(root) / "project.json"
-    project = read_json(project_path)
-    approval = project.setdefault("cost_approval", {})
-    was_approved = approval.get("status") == "APPROVED" or bool(approval.get("task_contracts"))
-    approval.update(
-        {
-            "status": "UNAPPROVED",
-            "scenario": None,
-            "max_credits": None,
-            "approved_by": None,
-            "approved_at": None,
-            "task_contracts": {},
-        }
-    )
-    project["updated_at"] = utc_now()
-    atomic_write_json(project_path, project)
-    if was_approved:
-        append_history(root, "cost_approval_revoked", actor, "cost", "production", {"reason": reason})
+    append_history(root, "reference_estimates_invalidated", actor, "cost", "production", {"reason": reason})
 
 
 def set_requirement(
@@ -392,7 +436,7 @@ def set_requirement(
         )
         project["stage"] = "REQUIREMENTS_CHANGED"
         atomic_write_json(project_path, project)
-        invalidate_cost_approval(root, actor, f"requirement changed: {field}")
+        invalidate_reference_estimates(root, actor, f"requirement changed: {field}")
     append_history(root, "requirement_updated", actor, "requirement", field, {"status": status})
     sync_dashboard(root)
 
@@ -424,69 +468,39 @@ def lock_requirements(root: str | Path, actor: str) -> None:
     sync_dashboard(root)
 
 
-def approve_cost(root: str | Path, scenario: str, max_credits: float, actor: str) -> None:
+def approve_budget(root: str | Path, max_credits: float, actor: str) -> None:
     if actor != "user":
-        raise StateError("only the user may approve a cost ceiling")
+        raise StateError("only the user may approve a project credit ceiling")
     if max_credits < 0:
         raise StateError("max_credits must be non-negative")
     project_path = data_dir(root) / "project.json"
     project = read_json(project_path)
     costs = read_json(data_dir(root) / "costs.json")
     if project.get("requirements_lock", {}).get("status") != "LOCKED":
-        raise StateError("requirements must be locked before cost approval")
-    if scenario not in costs.get("scenarios", {}):
-        raise StateError(f"unknown cost scenario: {scenario}")
-    estimate = costs["scenarios"][scenario].get("estimated_credits")
-    if estimate is None:
-        raise StateError(f"cost scenario has no estimate: {scenario}")
-    if float(estimate) > max_credits:
-        raise StateError("approved ceiling is below the scenario estimate")
-    selected_estimates = [
-        item for item in costs.get("task_estimates", []) if item.get("scenario") == scenario
-    ]
-    if not selected_estimates:
-        raise StateError(f"cost scenario has no per-shot execution contracts: {scenario}")
-    task_total = round(sum(float(item.get("credits", 0)) for item in selected_estimates), 6)
-    if abs(task_total - float(estimate)) > 0.000001:
-        raise StateError("cost scenario total does not match per-shot estimates")
-    task_contracts: dict[str, str] = {}
-    shots = read_json(data_dir(root) / "shots.json").get("items", [])
-    current_contracts: dict[str, str] = {}
-    for shot in shots:
-        execution = shot.get("generation", {}).get("execution") or {}
-        mode, argv = execution.get("mode"), execution.get("argv") or []
-        if mode not in {"model", "workflow"} or not argv:
-            raise StateError(f"shot has no executable cost contract: {shot.get('id')}")
-        current_contracts[str(shot.get("id"))] = execution_contract.fingerprint(mode, argv)
-    for item in selected_estimates:
-        shot_id = item.get("shot_id")
-        fingerprint_ = item.get("execution_fingerprint")
-        if not isinstance(shot_id, str) or not isinstance(fingerprint_, str):
-            raise StateError("cost estimate is missing an execution contract fingerprint")
-        if current_contracts.get(shot_id) != fingerprint_:
-            raise StateError(f"cost estimate does not match current execution contract: {shot_id}")
-        task_contracts[shot_id] = fingerprint_
-    missing_shots = sorted(set(current_contracts) - set(task_contracts))
-    if missing_shots:
-        raise StateError("approved scenario is missing per-shot estimates: " + ", ".join(missing_shots))
-    for item in costs["scenarios"].values():
-        item["approved"] = False
-    costs["scenarios"][scenario]["approved"] = True
-    costs["updated_at"] = utc_now()
+        raise StateError("requirements must be locked before budget approval")
+    actual = float(costs.get("actual", {}).get("credits", 0) or 0)
+    if max_credits < actual:
+        raise StateError("approved ceiling cannot be below credits already used")
     project["cost_approval"].update(
         {
             "status": "APPROVED",
-            "scenario": scenario,
+            "mode": "PROJECT_CEILING",
             "max_credits": max_credits,
             "approved_by": actor,
             "approved_at": utc_now(),
-            "task_contracts": task_contracts,
+            "unpriced_job_risk_acknowledged": True,
         }
     )
     project["updated_at"] = utc_now()
-    atomic_write_json(data_dir(root) / "costs.json", costs)
     atomic_write_json(project_path, project)
-    append_history(root, "cost_ceiling_approved", actor, "project", project["project"]["id"], {"scenario": scenario, "max_credits": max_credits})
+    append_history(
+        root,
+        "project_credit_ceiling_approved",
+        actor,
+        "project",
+        project["project"]["id"],
+        {"max_credits": max_credits, "live_quote_removed": True},
+    )
     sync_dashboard(root)
 
 
@@ -616,6 +630,7 @@ def add_shot(root: str | Path, shot_id: str, scene_id: str, title: str, order: i
             "audio_continuity": None,
             "next_scene_setup": None,
         },
+        "boundary": default_boundary_plan(),
         "required_asset_ids": [],
         "references": {
             "start": None,
@@ -635,12 +650,10 @@ def add_shot(root: str | Path, shot_id: str, scene_id: str, title: str, order: i
             "job_id": None,
             "version": 1,
             "retry_count": 0,
-            "cost_argv": [],
-            "cost_options": {},
             "execution": {"mode": None, "argv": [], "fingerprint": None},
             "result_path": None,
         },
-        "audio": {"route": "UNDECIDED", "original_retained": None, "voice_change": False, "narration": False},
+        "audio": default_audio_plan(),
         "qc": {
             "technical": "PENDING",
             "transcript": "PENDING",
@@ -661,7 +674,7 @@ def add_shot(root: str | Path, shot_id: str, scene_id: str, title: str, order: i
     shots["updated_at"] = utc_now()
     atomic_write_json(shots_path, shots)
     append_history(root, "shot_added", "agent", "shot", shot_id, {"scene_id": scene_id, "order": order})
-    invalidate_cost_approval(root, "agent", f"shot added: {shot_id}")
+    invalidate_reference_estimates(root, "agent", f"shot added: {shot_id}")
     sync_dashboard(root)
 
 
@@ -672,12 +685,11 @@ def update_shot(root: str | Path, shot_id: str, patch: dict[str, Any], actor: st
         "duration_seconds",
         "purpose",
         "continuity",
+        "boundary",
         "required_asset_ids",
         "references",
         "audio",
         "model",
-        "cost_argv",
-        "cost_options",
         "execution",
         "shot_grammar",
         "seedance_plan",
@@ -691,21 +703,6 @@ def update_shot(root: str | Path, shot_id: str, patch: dict[str, Any], actor: st
     normalized = deepcopy(patch)
     if "model" in normalized:
         shot["generation"]["model"] = normalized.pop("model")
-    if "cost_argv" in normalized:
-        value = normalized.pop("cost_argv")
-        if not isinstance(value, list) or not all(isinstance(part, str) for part in value):
-            raise StateError("cost_argv must be a JSON array of strings")
-        shot["generation"]["cost_argv"] = value
-    if "cost_options" in normalized:
-        value = normalized.pop("cost_options")
-        if not isinstance(value, dict):
-            raise StateError("cost_options must be a JSON object")
-        for scenario, argv in value.items():
-            if scenario not in {"economy", "recommended", "highest_quality"}:
-                raise StateError(f"unknown cost option: {scenario}")
-            if not isinstance(argv, list) or not all(isinstance(part, str) for part in argv):
-                raise StateError(f"cost option {scenario} must be an array of strings")
-        shot["generation"]["cost_options"] = value
     if "execution" in normalized:
         value = normalized.pop("execution")
         if not isinstance(value, dict):
@@ -727,7 +724,7 @@ def update_shot(root: str | Path, shot_id: str, patch: dict[str, Any], actor: st
             shot["shot_grammar"] = cinematography.merge_grammar(shot.get("shot_grammar"), value)
         except cinematography.CinematographyError as exc:
             raise StateError(str(exc)) from exc
-    for nested in ("continuity", "references", "audio", "seedance_plan"):
+    for nested in ("continuity", "boundary", "references", "audio", "seedance_plan"):
         if nested in normalized:
             value = normalized.pop(nested)
             if not isinstance(value, dict):
@@ -750,41 +747,97 @@ def update_shot(root: str | Path, shot_id: str, patch: dict[str, Any], actor: st
     atomic_write_json(path, shots)
     append_history(root, "shot_updated", actor, "shot", shot_id, {"fields": sorted(patch)})
     cost_fields = {
-        "duration_seconds", "references", "model", "cost_argv", "cost_options",
+        "duration_seconds", "references", "model",
         "execution", "seedance_plan", "shot_grammar",
     }
     if cost_fields & set(patch):
-        invalidate_cost_approval(root, actor, "shot cost contract changed: " + ", ".join(sorted(cost_fields & set(patch))))
+        invalidate_reference_estimates(root, actor, "shot execution profile changed: " + ", ".join(sorted(cost_fields & set(patch))))
     sync_dashboard(root)
 
 
-def set_cost_scenario(root: str | Path, scenario: str, estimated_credits: float, actor: str) -> None:
-    if estimated_credits < 0:
-        raise StateError("estimated credits must be non-negative")
-    path = data_dir(root) / "costs.json"
-    costs = read_json(path)
-    if scenario not in costs.get("scenarios", {}):
-        raise StateError(f"unknown cost scenario: {scenario}")
-    revoke_cost_approval(root, actor, f"cost scenario refreshed: {scenario}")
-    for item in costs.get("scenarios", {}).values():
-        item["approved"] = False
-    costs["scenarios"][scenario]["estimated_credits"] = float(estimated_credits)
-    costs["updated_at"] = utc_now()
-    atomic_write_json(path, costs)
-    append_history(root, "cost_scenario_estimated", actor, "cost", scenario, {"estimated_credits": estimated_credits})
-    sync_dashboard(root)
+def set_boundary(
+    root: str | Path,
+    shot_id: str,
+    strategy: str,
+    actor: str,
+    *,
+    reason: str,
+    previous_shot_id: str | None = None,
+    previous_frame: str | None = None,
+    planned_keyframe: str | None = None,
+    cut_type: str | None = None,
+) -> None:
+    if strategy not in BOUNDARY_STRATEGIES:
+        raise StateError(f"invalid boundary strategy: {strategy}")
+    if not reason.strip():
+        raise StateError("boundary reason is required")
+    shots = read_json(data_dir(root) / "shots.json")
+    shot = _find(shots.get("items", []), shot_id, "shot")
+    references = deepcopy(shot.get("references") or {})
+    # Single-start-image video contract: the paid video call carries exactly
+    # one start image; identity/location/prop references belong to the
+    # start-frame composition step, never to the video generation call.
+    references["images"] = []
+    if strategy in {"continuous_match", "motivated_transition"}:
+        if not previous_shot_id or not previous_frame:
+            raise StateError("continuous boundary requires previous_shot_id and previous_frame")
+        references["start"] = previous_frame
+        inherit = True
+    else:
+        if not planned_keyframe:
+            raise StateError("editorial cut or scene reset requires a composed planned_keyframe start image")
+        previous_shot_id = None
+        previous_frame = None
+        references["start"] = planned_keyframe
+        inherit = False
+    if strategy == "motivated_transition":
+        if not planned_keyframe:
+            raise StateError("motivated transition requires planned_keyframe")
+        references["end"] = planned_keyframe
+        role = "end_image"
+    elif strategy == "continuous_match":
+        # A pre-designed keyframe may inform story re-alignment and the prompt,
+        # but it is never transported in the video call.
+        role = "analysis_only" if planned_keyframe else "none"
+    else:
+        role = "start_image"
+    update_shot(
+        root,
+        shot_id,
+        {
+            "boundary": {
+                "strategy": strategy,
+                "previous_shot_id": previous_shot_id,
+                "inherit_previous_last_frame": inherit,
+                "previous_boundary_frame": previous_frame,
+                "planned_keyframe": planned_keyframe,
+                "planned_keyframe_role": role,
+                "cut_type": cut_type,
+                "reason": reason,
+            },
+            "references": references,
+        },
+        actor,
+    )
 
 
-def replace_task_estimates(root: str | Path, estimates: list[dict[str, Any]], actor: str) -> None:
+def store_reference_estimates(root: str | Path, estimates: dict[str, Any], actor: str) -> None:
+    """Store non-authoritative arithmetic guidance derived from actual jobs."""
     path = data_dir(root) / "costs.json"
     costs = read_json(path)
-    revoke_cost_approval(root, actor, "per-shot cost contracts refreshed")
-    for item in costs.get("scenarios", {}).values():
-        item["approved"] = False
-    costs["task_estimates"] = estimates
+    if not isinstance(estimates, dict) or estimates.get("method") != "recent_actual_arithmetic":
+        raise StateError("reference estimate must use recent_actual_arithmetic")
+    costs["reference_estimates"] = deepcopy(estimates)
     costs["updated_at"] = utc_now()
     atomic_write_json(path, costs)
-    append_history(root, "task_costs_estimated", actor, "cost", "tasks", {"count": len(estimates)})
+    append_history(
+        root,
+        "reference_costs_calculated",
+        actor,
+        "cost",
+        "production",
+        {"covered_shots": estimates.get("covered_shots"), "total_shots": estimates.get("total_shots")},
+    )
     sync_dashboard(root)
 
 
@@ -812,6 +865,7 @@ def record_actual_cost(
     credits: float,
     actor: str,
     job_id: str | None = None,
+    execution_profile: dict[str, Any] | None = None,
 ) -> None:
     if credits < 0:
         raise StateError("actual credits must be non-negative")
@@ -822,18 +876,59 @@ def record_actual_cost(
         "job_id": job_id,
         "credits": float(credits),
         "recorded_at": utc_now(),
+        "execution_profile": deepcopy(execution_profile) if execution_profile else None,
     }
-    costs.setdefault("actual", {}).setdefault("transactions", []).append(transaction)
-    costs["actual"]["credits"] = round(
-        sum(float(item.get("credits", 0)) for item in costs["actual"]["transactions"]), 6
-    )
+    actual = costs.setdefault("actual", {})
+    transactions = actual.setdefault("transactions", [])
+    projected = round(sum(float(item.get("credits", 0)) for item in transactions) + float(credits), 6)
     project = read_json(data_dir(root) / "project.json")
     ceiling = project.get("cost_approval", {}).get("max_credits")
-    if ceiling is not None and costs["actual"]["credits"] > float(ceiling):
+    if ceiling is not None and projected > float(ceiling):
         raise StateError("recorded cost would exceed the approved ceiling")
+    transactions.append(transaction)
+    actual["credits"] = projected
+    pending = actual.setdefault("pending", [])
+    actual["pending"] = [
+        item
+        for item in pending
+        if not (
+            (job_id and item.get("job_id") == job_id)
+            or (not job_id and item.get("entity_id") == entity_id)
+        )
+    ]
+    actual["reconciliation_required"] = bool(actual["pending"])
     costs["updated_at"] = utc_now()
     atomic_write_json(costs_path, costs)
     append_history(root, "actual_cost_recorded", actor, "cost", entity_id, transaction)
+    sync_dashboard(root)
+
+
+def require_cost_reconciliation(
+    root: str | Path,
+    entity_id: str,
+    actor: str,
+    *,
+    job_id: str | None,
+    reported_credits: float | None,
+    reason: str,
+) -> None:
+    costs_path = data_dir(root) / "costs.json"
+    costs = read_json(costs_path)
+    actual = costs.setdefault("actual", {})
+    pending = actual.setdefault("pending", [])
+    entry = {
+        "entity_id": entity_id,
+        "job_id": job_id,
+        "reported_credits": reported_credits,
+        "reason": reason,
+        "recorded_at": utc_now(),
+    }
+    if not any(item.get("job_id") == job_id and item.get("entity_id") == entity_id for item in pending):
+        pending.append(entry)
+    actual["reconciliation_required"] = True
+    costs["updated_at"] = utc_now()
+    atomic_write_json(costs_path, costs)
+    append_history(root, "actual_cost_reconciliation_required", actor, "cost", entity_id, entry)
     sync_dashboard(root)
 
 
@@ -894,6 +989,104 @@ def execution_binding_errors(shot: dict[str, Any]) -> list[str]:
     return errors
 
 
+def boundary_plan_errors(shot: dict[str, Any]) -> list[str]:
+    plan = shot.get("boundary") or {}
+    strategy = plan.get("strategy")
+    if strategy not in BOUNDARY_STRATEGIES:
+        return ["boundary strategy is undecided or invalid"]
+    role = plan.get("planned_keyframe_role")
+    if role not in KEYFRAME_ROLES:
+        return ["planned keyframe role is invalid"]
+    errors: list[str] = []
+    if not plan.get("reason"):
+        errors.append("boundary director reason is missing")
+    if role == "image_reference":
+        errors.append("planned keyframe must not ride the video call as an image_reference; single-start-image policy")
+    references = shot.get("references") or {}
+    inherit = plan.get("inherit_previous_last_frame")
+    if strategy in {"continuous_match", "motivated_transition"}:
+        if inherit is not True:
+            errors.append("continuous boundary must inherit the previous last frame")
+        if not plan.get("previous_shot_id"):
+            errors.append("continuous boundary is missing previous_shot_id")
+        previous_frame = plan.get("previous_boundary_frame")
+        if not previous_frame:
+            errors.append("continuous boundary is missing the extracted previous frame")
+        elif references.get("start") != previous_frame:
+            errors.append("previous boundary frame must be transported as start_image")
+    elif inherit is not False:
+        errors.append("editorial cut or scene reset must not inherit the previous last frame")
+    if strategy == "motivated_transition":
+        if role != "end_image":
+            errors.append("motivated transition must use the planned keyframe as end_image")
+        if not plan.get("planned_keyframe") or references.get("end") != plan.get("planned_keyframe"):
+            errors.append("motivated transition is missing its planned end keyframe")
+    if strategy in {"editorial_cut", "scene_reset"}:
+        if not plan.get("planned_keyframe") or references.get("start") != plan.get("planned_keyframe"):
+            errors.append("cut/reset requires its composed planned keyframe as the start_image")
+    return errors
+
+
+def start_image_policy_errors(shot: dict[str, Any]) -> list[str]:
+    """Enforce the single-start-image video contract.
+
+    A paid video call carries exactly one start image, plus the locked dialogue
+    master when the audio route requires it, plus an end image only for a
+    motivated transition. Identity, location, and prop references belong to the
+    start-frame composition step, never to the video generation call.
+    """
+    references = shot.get("references") or {}
+    strategy = (shot.get("boundary") or {}).get("strategy")
+    errors: list[str] = []
+    if not references.get("start"):
+        errors.append("video execution requires exactly one start image")
+    if references.get("images"):
+        errors.append("image references are reserved for start-frame composition, not the video call")
+    if references.get("end") and strategy != "motivated_transition":
+        errors.append("end image is allowed only for a motivated transition")
+    execution = shot.get("generation", {}).get("execution") or {}
+    argv = execution.get("argv") or []
+    if isinstance(argv, list) and argv:
+        _, flags = execution_contract.parse_flags(argv)
+        if flags.get("image_references"):
+            errors.append("execution argv must not carry image_references")
+        if references.get("start") and flags.get("start_image") != references.get("start"):
+            errors.append("execution start_image must match references.start")
+        if flags.get("end_image") and strategy != "motivated_transition":
+            errors.append("execution end_image is allowed only for a motivated transition")
+    return errors
+
+
+def audio_plan_errors(shot: dict[str, Any]) -> list[str]:
+    audio = shot.get("audio") or {}
+    route = audio.get("route")
+    if route not in AUDIO_ROUTES:
+        return ["audio route is undecided or invalid"]
+    audio_mode = (shot.get("seedance_plan") or {}).get("audio_mode")
+    errors: list[str] = []
+    if route in {"NO_DIALOGUE_POST", "OFFSCREEN_NARRATION"} and audio_mode != "post_only":
+        errors.append("non-visible speech routes must generate picture with audio_mode=post_only")
+    if route == "INTENTIONAL_SILENCE" and audio_mode != "none":
+        errors.append("intentional silence must use audio_mode=none")
+    if route == "OFFSCREEN_NARRATION" and audio.get("has_visible_dialogue") is not False:
+        errors.append("off-screen narration must declare has_visible_dialogue=false")
+    if route == "VISIBLE_DIALOGUE_ELEVENLABS_V3":
+        if audio_mode != "audio_reference":
+            errors.append("visible dialogue must use the locked ElevenLabs master as audio_reference")
+        if audio.get("voice_provider") != "elevenlabs" or audio.get("voice_model") != "eleven_v3":
+            errors.append("visible dialogue must lock voice_provider=elevenlabs and voice_model=eleven_v3")
+        master = audio.get("dialogue_master_path")
+        if not master:
+            errors.append("visible dialogue is missing the locked dialogue master")
+        elif master not in (shot.get("references") or {}).get("audios", []):
+            errors.append("dialogue master must be present in audio_references")
+        if audio.get("discard_generated_track") is not True:
+            errors.append("visible dialogue must discard the Seedance-rendered audio track")
+        if audio.get("final_mix_required") is not True:
+            errors.append("visible dialogue must require a final external mix")
+    return errors
+
+
 def shot_gate_errors(state: dict[str, dict[str, Any]], shot: dict[str, Any]) -> list[str]:
     errors: list[str] = []
     project = state["project"]
@@ -911,6 +1104,9 @@ def shot_gate_errors(state: dict[str, dict[str, Any]], shot: dict[str, Any]) -> 
     missing_context = [key for key, value in continuity.items() if not value]
     if missing_context:
         errors.append("continuity context missing: " + ", ".join(missing_context))
+    errors.extend(boundary_plan_errors(shot))
+    errors.extend(start_image_policy_errors(shot))
+    errors.extend(audio_plan_errors(shot))
     binding = shot.get("shot_grammar", {}).get("provider_binding", {})
     if binding.get("provider") in {"seedance_2_0", "seedance_2_0_mini"}:
         plan = shot.get("seedance_plan") or {}
@@ -1047,6 +1243,8 @@ def aggregate(root: str | Path) -> dict[str, Any]:
         blockers.append("요구사항 승인 필요")
     if state["project"].get("cost_approval", {}).get("status") != "APPROVED":
         blockers.append("비용 상한 승인 필요")
+    if state["costs"].get("actual", {}).get("reconciliation_required"):
+        blockers.append("실제 크레딧 사용량 대사 필요")
     blockers.extend(
         f"{shot.get('id')}: {message}"
         for shot in shots

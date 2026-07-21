@@ -36,18 +36,47 @@ def find_value(value: Any, keys: set[str]) -> Any:
 
 def provider_job_id(value: Any) -> str | None:
     """Accept only explicit job/generation identifiers in known response envelopes."""
+    if isinstance(value, list):
+        value = value[0] if value and isinstance(value[0], dict) else None
     if not isinstance(value, dict):
         return None
-    for key in ("job_id", "generation_id"):
+    for key in ("job_id", "generation_id", "id"):
         if isinstance(value.get(key), str) and value[key]:
             return value[key]
     for envelope in ("data", "result", "generation", "job"):
         child = value.get(envelope)
         if isinstance(child, dict):
-            for key in ("job_id", "generation_id"):
+            for key in ("job_id", "generation_id", "id"):
                 if isinstance(child.get(key), str) and child[key]:
                     return child[key]
     return None
+
+
+def expand_media_args(argv: list[str]) -> list[str]:
+    """Expand JSON-array media flag values into repeated CLI flags.
+
+    The state contract stores list-valued media references as one JSON-array
+    token so fingerprints and grammar bindings stay canonical, but the live
+    Higgsfield CLI accepts one path or UUID per flag occurrence.
+    """
+    expanded: list[str] = []
+    index = 0
+    while index < len(argv):
+        part = argv[index]
+        normalized = execution_contract.normalize_flag(part) if part.startswith("--") else part
+        if normalized in execution_contract.MEDIA_FLAGS and index + 1 < len(argv):
+            try:
+                decoded = json.loads(argv[index + 1])
+            except json.JSONDecodeError:
+                decoded = None
+            if isinstance(decoded, list):
+                for item in decoded:
+                    expanded.extend((part, str(item)))
+                index += 2
+                continue
+        expanded.append(part)
+        index += 1
+    return expanded
 
 
 def cli_json(command: list[str], timeout: int) -> Any:
@@ -81,22 +110,15 @@ def run_paid(
         raise state.StateError("generation gate failed: " + "; ".join(gates))
 
     approval = documents["project"].get("cost_approval", {})
-    scenario = approval.get("scenario")
-    estimate = next(
-        (
-            item
-            for item in documents["costs"].get("task_estimates", [])
-            if item.get("shot_id") == shot_id and item.get("scenario") == scenario
-        ),
-        None,
-    )
-    if estimate is None:
-        raise state.StateError("approved scenario has no exact per-shot estimate")
-    estimated_credits = float(estimate.get("credits", 0))
+    if approval.get("mode") != "PROJECT_CEILING" or not approval.get("unpriced_job_risk_acknowledged"):
+        raise state.StateError("project ceiling does not acknowledge execution without a live quote")
+    if documents["costs"].get("actual", {}).get("reconciliation_required"):
+        raise state.StateError("actual credit reconciliation is required before another paid job")
     actual_so_far = float(documents["costs"].get("actual", {}).get("credits", 0) or 0)
     ceiling = float(approval.get("max_credits"))
-    if actual_so_far + estimated_credits > ceiling:
-        raise state.StateError("estimated shot cost exceeds the remaining approved ceiling")
+    remaining_ceiling = ceiling - actual_so_far
+    if remaining_ceiling <= 0:
+        raise state.StateError("approved project credit ceiling is exhausted")
 
     execution = shot.get("generation", {}).get("execution", {})
     mode, argv = execution.get("mode"), execution.get("argv") or []
@@ -105,10 +127,20 @@ def run_paid(
     execution_fingerprint = execution_contract.fingerprint(mode, argv)
     if execution.get("fingerprint") not in {None, execution_fingerprint}:
         raise state.StateError("stored execution fingerprint does not match execution arguments")
-    if estimate.get("execution_fingerprint") != execution_fingerprint:
-        raise state.StateError("approved cost quote does not match the execution arguments")
-    if approval.get("task_contracts", {}).get(shot_id) != execution_fingerprint:
-        raise state.StateError("cost approval is not bound to this execution contract")
+    profile = estimate_costs.execution_profile(mode, argv, fallback_duration=shot.get("duration_seconds"))
+    reference_row = next(
+        (
+            item
+            for item in documents["costs"].get("reference_estimates", {}).get("shots", [])
+            if item.get("shot_id") == shot_id
+            and item.get("status") == "REFERENCE_ONLY"
+            and item.get("profile") == profile
+        ),
+        None,
+    )
+    reference_credits = float(reference_row["estimated_credits"]) if reference_row else None
+    if reference_credits is not None and reference_credits > remaining_ceiling:
+        raise state.StateError("reference arithmetic exceeds the remaining approved ceiling")
 
     provider, flags = execution_contract.parse_flags(argv)
     binding = shot.get("shot_grammar", {}).get("provider_binding", {})
@@ -126,7 +158,7 @@ def run_paid(
     contract_command = [executable, "--json", "workflow" if mode == "workflow" else "model", "get", provider]
     current_contract = cli_json(contract_command, min(timeout, 60))
     if cinematography.stable_hash(current_contract) != expected_schema_hash:
-        raise state.StateError("live provider contract changed after shot compilation; recompile and requote")
+        raise state.StateError("live provider contract changed after shot compilation; recompile before execution")
     uploads = estimate_costs.local_media_args(argv)
     if uploads and not authorize_local_upload:
         raise state.StateError(
@@ -138,12 +170,14 @@ def run_paid(
     available = find_value(account, {"credits"})
     if not isinstance(available, (int, float)) or isinstance(available, bool):
         raise state.StateError("could not verify available Higgsfield credits")
-    if float(available) < estimated_credits:
+    if float(available) <= 0:
+        raise state.StateError("Higgsfield account has no available credits")
+    if reference_credits is not None and float(available) < reference_credits:
         raise state.StateError(
-            f"available credits {available} are below this shot estimate {estimated_credits}"
+            f"available credits {available} are below the reference arithmetic {reference_credits}"
         )
 
-    command = [executable, "--json", "generate", "create" if mode == "model" else "workflow", *argv]
+    command = [executable, "--json", "generate", "create" if mode == "model" else "workflow", *expand_media_args(argv)]
     if "--wait" not in argv:
         command.append("--wait")
     state.transition_generation(production, shot_id, "QUEUED", "agent", "guarded paid execution")
@@ -168,34 +202,41 @@ def run_paid(
     reconciliation = False
     if isinstance(charged, (int, float)) and not isinstance(charged, bool):
         try:
-            state.record_actual_cost(production, shot_id, float(charged), "agent", job_id)
+            state.record_actual_cost(
+                production,
+                shot_id,
+                float(charged),
+                "agent",
+                job_id,
+                execution_profile=profile,
+            )
             recorded = True
         except state.StateError:
-            state.append_history(
+            state.require_cost_reconciliation(
                 production,
-                "actual_cost_reconciliation_required",
-                "agent",
-                "cost",
                 shot_id,
-                {"job_id": job_id, "reported_credits": float(charged)},
+                "agent",
+                job_id=job_id,
+                reported_credits=float(charged),
+                reason="provider-reported credits exceed the approved ceiling",
             )
-            state.sync_dashboard(production)
             reconciliation = True
     else:
-        state.append_history(
+        state.require_cost_reconciliation(
             production,
-            "actual_cost_pending",
-            "agent",
-            "cost",
             shot_id,
-            {"job_id": job_id},
+            "agent",
+            job_id=job_id,
+            reported_credits=None,
+            reason="provider response did not expose numeric credits",
         )
-        state.sync_dashboard(production)
     return {
         "shot_id": shot_id,
         "job_id": job_id,
         "status": "GENERATED",
-        "estimated_credits": estimated_credits,
+        "reference_estimated_credits": reference_credits,
+        "remaining_ceiling_before_run": remaining_ceiling,
+        "live_quote_used": False,
         "actual_credits_recorded": recorded,
         "cost_reconciliation_required": reconciliation or not recorded,
     }
