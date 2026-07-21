@@ -53,7 +53,8 @@ orchestration supplied by this skill.
 - Redacted live CLI/model/workflow/account/MCP preflight.
 - Korean/English OCR text-presence checker.
 - FFmpeg/ffprobe finishing helpers.
-- Schema v8 story-anchor, adaptive-analysis, start-image preparation,
+- Schema v9 adaptive approval profiles, production routing, story-anchor,
+  director-intelligence summaries, adaptive-analysis, start-image preparation,
   optional SSIM/PSNR first-frame evidence, director boundary selection, JIT provenance,
   compact native sound brief, generated-track policy, and recorded-reference
   SHA-256 gates.

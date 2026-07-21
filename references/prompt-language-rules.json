@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "abstract_terms": {
+    "cinematic": ["composition", "lighting", "color", "camera distance"],
+    "dramatic": ["contrast", "camera distance", "movement timing", "lighting direction"],
+    "epic": ["scale", "subject size in frame", "environment extent"],
+    "beautiful": ["light quality", "color relationship", "surface detail"],
+    "emotional": ["observable performance cue", "gaze", "breath", "posture"]
+  },
+  "ambiguous_verbs": {
+    "tearing": ["ripping material", "crying"],
+    "shoot": ["filming", "firing a weapon"],
+    "wave": ["hand gesture", "water motion"],
+    "draw": ["pull", "sketch", "weapon action"]
+  },
+  "target_ranges": {
+    "simple": [30, 60],
+    "dialogue": [50, 90],
+    "emotion": [50, 90],
+    "transition": [60, 110],
+    "multishot": [60, 140]
+  }
+}

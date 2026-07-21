@@ -15,10 +15,10 @@ preferences are not approval.
 
 ## Requirement gate
 
-All fourteen required fields must be `CONFIRMED`. Locking records actor, time,
+`FULL` requires all fourteen fields `CONFIRMED`; locking records actor, time,
 and version. A later change unlocks requirements and invalidates reference-only
-arithmetic. The approved project ceiling remains a total limit; generation is
-still blocked while requirements are unlocked.
+arithmetic. `TARGETED` and `LIGHT` do not force the consolidated requirement
+lock. Their spend boundary and live execution contract remain mandatory.
 
 ## Asset gate
 
@@ -37,9 +37,12 @@ The board uses the same approval flow and a version number. A planning change
 invalidates approval, clears provider job/result fields, resets QC, and removes
 the version from the final timeline.
 
-Generation cannot queue until requirements and the project ceiling are
-approved, the shot board is locked, every required asset is locked, and all
-eight continuity fields, boundary strategy, and audio route are resolved.
+`FULL` requires requirements, project ceiling, locked board and assets, all
+eight continuity fields, boundary, audio, story, and adaptive sequence evidence.
+`TARGETED` requires the ceiling, load-bearing board/assets, boundary, prepared
+start image, audio, and execution contract. `LIGHT` requires the ceiling,
+prepared input, audio route, and compiled execution contract but omits the full
+board and continuity package.
 
 ## Generation and QC gate
 
@@ -66,7 +69,8 @@ separate recorded check when relevant.
 ## Credit policy
 
 - Never call `higgsfield generate cost`; remove three-scenario and whole-project live quoting.
-- Ask the user to approve one total project credit ceiling after requirements lock.
+- Ask the user to approve one total project credit ceiling after requirements
+  lock in `FULL`; `LIGHT` and `TARGETED` may approve it directly after routing.
 - Explain that without a live quote a single submitted job can exceed the
   remaining ceiling; the ceiling is a preflight stop, not a provider-side cap.
 - Optionally calculate a reference value from recent matching actual jobs only:

@@ -1,0 +1,63 @@
+{
+  "version": 1,
+  "presets": {
+    "shock": {
+      "eyes": ["eyes widen briefly while the gaze stays fixed"],
+      "face": ["lips part slightly"],
+      "breath": ["a short inhale through the mouth"],
+      "posture": ["the upper body freezes for a beat"],
+      "hands": ["one hand lifts involuntarily toward the chest"]
+    },
+    "disbelief": {
+      "eyes": ["a slow blink while the gaze stays fixed"],
+      "face": ["one eyebrow rises slightly", "the lips press together"],
+      "posture": ["the head tilts a few degrees"]
+    },
+    "fear": {
+      "eyes": ["the gaze darts once toward the threat"],
+      "breath": ["breathing becomes shallow"],
+      "posture": ["the shoulders draw inward"],
+      "hands": ["the fingers tense around the held object"]
+    },
+    "grief": {
+      "eyes": ["the gaze lowers and holds"],
+      "face": ["the jaw tightens before relaxing"],
+      "breath": ["one uneven exhale"],
+      "posture": ["the shoulders sink slightly"]
+    },
+    "relief": {
+      "eyes": ["the eyelids soften"],
+      "face": ["a restrained smile appears"],
+      "breath": ["a long breath releases"],
+      "posture": ["the shoulders release downward"]
+    },
+    "determination": {
+      "eyes": ["the gaze settles on the objective"],
+      "face": ["the jaw sets"],
+      "breath": ["one controlled inhale"],
+      "posture": ["the torso straightens"]
+    },
+    "suspicion": {
+      "eyes": ["the eyes narrow slightly"],
+      "face": ["one corner of the mouth tightens"],
+      "posture": ["the head turns before the shoulders follow"]
+    },
+    "tenderness": {
+      "eyes": ["the gaze softens and remains steady"],
+      "face": ["a small closed-mouth smile"],
+      "hands": ["the touch becomes slower and lighter"]
+    },
+    "anger": {
+      "eyes": ["the gaze locks forward"],
+      "face": ["the jaw clenches briefly"],
+      "breath": ["a controlled breath through the nose"],
+      "hands": ["the fingers curl once and release"]
+    },
+    "hesitation": {
+      "eyes": ["the gaze drops briefly before returning"],
+      "face": ["the lips open as if to speak, then close"],
+      "hands": ["the reaching hand pauses short of contact"],
+      "posture": ["the weight shifts back slightly"]
+    }
+  }
+}

@@ -1,6 +1,6 @@
 ---
 name: sonol-higgsfield
-description: Orchestrate approval-gated Higgsfield video productions from requirements interview through storyboard, director-selected shot boundaries, Seedance generation with ElevenLabs V3-conditioned native dialogue audio, continuity and Korean-text QC, FFmpeg finishing, recent-actual credit guidance, and a persistent local dashboard. Use when a user asks to plan, generate, manage, review, resume, or finish a multi-shot Higgsfield film, ad, story, campaign, or narrated video with reusable characters, references, audio, approvals, and selective regeneration.
+description: Route and orchestrate Higgsfield video work from quick clips and native Seedance multi-shot sequences to approval-gated serial productions, with minimum-sufficient prompts, ElevenLabs V3-conditioned native dialogue audio, adaptive continuity, QC, recovery, and a persistent dashboard. Use for multi-job films, stories, campaigns, or controlled shots needing reusable characters, selective regeneration, provider recovery, or production state; route ads and explainers to Higgsfield's official dedicated workflows first.
 ---
 
 # Sonol Higgsfield
@@ -13,7 +13,7 @@ adapter whose live tool schema must be visible before use.
 ## Bootstrap
 
 1. Locate this skill directory and set `SONOL_HIGGSFIELD_SKILL` to it.
-2. Run the deterministic preflight before planning a paid generation:
+2. Run the deterministic preflight before planning a managed paid generation:
 
    ```bash
    python3 "$SONOL_HIGGSFIELD_SKILL/scripts/inspect_live_schema.py" \
@@ -24,27 +24,51 @@ adapter whose live tool schema must be visible before use.
    - `higgsfield` is installed and authenticated.
    - A billing workspace is selected.
    - The requested model or workflow appears in the live CLI schema.
-   - The account has available credits and the user approved a project credit ceiling.
+   - The account has available credits and the user approved either a project
+     credit ceiling or the official direct workflow's own spend confirmation.
 4. Use MCP only when its URL ends in `/mcp`, its handshake succeeds, and the
    exact required tool schema is available in the current session. Otherwise
    continue through the CLI without claiming MCP parity.
 5. Read [higgsfield-live-contract.md](references/higgsfield-live-contract.md)
    before the first live call in a session.
 
-## Initialize A Production
+## Route Before Initializing
 
-Create the durable state and dashboard before asking production questions:
+Read [director-intelligence.md](references/director-intelligence.md) and run
+`director_intelligence.py route` before creating Sonol state. Select by intent:
+
+- `QUICK_CLIP`: one or two exploratory clips; use the official
+  `higgsfield-generate` skill and CLI directly.
+- `NATIVE_MULTISHOT`: one Seedance generation with two to four simple numbered,
+  timecoded beats inside 15 seconds.
+- `CONTROLLED_SHOT`: one core shot per generation when dialogue, acting,
+  product interaction, or camera precision carries the result.
+- `SERIAL_STORY`: multiple jobs, continuity, selective regeneration, or more
+  than 15 seconds; use Sonol state and recovery.
+- `OFFICIAL_WORKFLOW`: use Marketing Studio for ads and
+  `higgsfield-video-explainer` for explainers. Add Sonol only for optional audit
+  or downstream QC, not as the default owner.
+
+Set `LIGHT`, `TARGETED`, or `FULL` approval depth. Reserve `FULL` for high-cost,
+multi-job, or long projects. If a managed production is needed, persist the
+choice with `set-production-policy`. Do not initialize a dashboard merely to
+make a quick official generation.
+
+## Initialize A Managed Production
+
+Create durable state only after the router selects a managed mode:
 
 ```bash
 python3 "$SONOL_HIGGSFIELD_SKILL/scripts/sonol_higgsfield.py" init \
-  <production> --name "<project name>"
+  <production> --name "<project name>" --mode <routed_mode> \
+  --approval-profile <LIGHT|TARGETED|FULL>
 ```
 
 The production directory is the source of truth. Keep generated media under
 `media/`; keep behavior state under `data/`; never treat chat memory or a
 rendered dashboard as authoritative.
 
-## Mandatory Workflow
+## Adaptive Managed Workflow
 
 ### 1. Interview and lock requirements
 
@@ -53,12 +77,15 @@ already-supplied facts first. Ask one unresolved high-value question at a time.
 Write every answer immediately with `set-requirement` and preserve the states
 `CONFIRMED`, `INFERRED`, `UNKNOWN`, and `CONFLICT`.
 
-Do not generate final assets while any required field is `UNKNOWN` or
-`CONFLICT`. Show the completed production specification and require an explicit
-user approval before running `lock-requirements --actor user`.
+For `FULL`, do not generate final assets while a required field is `UNKNOWN` or
+`CONFLICT`; show the specification and require explicit approval before
+`lock-requirements --actor user`. For `TARGETED`, lock only the load-bearing
+shot, assets, and spend boundary. For `LIGHT`, rely on the compiled provider
+contract, prepared input, explicit audio route, and spend boundary rather than
+forcing the full interview and board sequence.
 
-Store the non-negotiable turning points as explicit anchor beats and require
-the user to lock them before any paid shot:
+In `FULL` serial stories, store non-negotiable turning points as explicit
+anchor beats and lock them before dependent paid shots:
 
 ```bash
 python3 "$SONOL_HIGGSFIELD_SKILL/scripts/sonol_higgsfield.py" lock-story \
@@ -83,14 +110,16 @@ python3 "$SONOL_HIGGSFIELD_SKILL/scripts/dashboard_server.py" <production>
 
 ### 3. Plan story, assets, scenes, and shots
 
-Write a timecoded script, then split it into short shots with one camera purpose
-and one primary action each. Read [film-grammar-core.md](references/film-grammar-core.md)
+Write a timecoded script, then choose boundaries by purpose. A single
+generation may be a controlled shot or a native multi-shot sequence; splitting
+is a risk-control recommendation, not a universal law. Read
+[film-grammar-core.md](references/film-grammar-core.md)
 and [shot-continuity.md](references/shot-continuity.md). Use the JSON catalog only
 when selecting or validating a technique; do not load all 148 records into the
 conversation by default.
 
-Treat the story as a sequential adaptive plan, not a fixed shot-by-shot
-blueprint. Lock the anchor beats (the story's non-negotiable turning points) and
+For a `SERIAL_STORY`, treat the story as a sequential adaptive plan, not a fixed
+shot-by-shot blueprint. Lock the anchor beats and
 any recorded dialogue or narration masters; keep the connective tissue between
 anchors flexible. Video generation is hard to control, so after each accepted
 shot, analyze its boundary frame and micro-adjust the next shot's action,
@@ -124,15 +153,22 @@ passes. Default to one primary camera movement. Treat `native_structured`,
 `unsupported` as distinct claims. A web preset or remembered MCP feature is not
 a CLI-native field.
 
-Assign stable IDs such as `CHAR_001`, `LOCATION_001`, `PROP_001`, `SCENE_001`,
-and `SHOT_001`.
-
-For every shot, record the prior context, current goal, emotion, visual state,
+For every `FULL` serial shot, record the prior context, current goal, emotion, visual state,
 action, camera state, audio state, next-shot setup, reference package,
 generation parameters, expected splice points, and one director-approved
-boundary strategy. Choose `continuous_match`, `motivated_transition`,
+boundary strategy when the chosen mode needs one. Choose `continuous_match`, `motivated_transition`,
 `editorial_cut`, or `scene_reset`; never inherit a previous frame merely because
 one exists.
+
+Before board approval, use the five advisory commands in
+`director_intelligence.py`: complexity for every planned managed shot; prompt
+lint before paid compilation; performance only for visible emotion-critical
+acting; camera only when a director choice is unresolved; and failure diagnosis
+after rejected attempts. Performance selects at most three visible physical
+cues. Camera returns at most two alternatives and never auto-selects. A
+`SPLIT_REQUIRED` result proposes a split but cannot change duration, shot count,
+or cost without approval. The linter preserves meaning and uses a target range,
+not a hard short-prompt limit.
 
 ### 4. Discover the live model contract and approve the budget ceiling
 
@@ -141,18 +177,21 @@ model/workflow lists and then inspect the selected contract. Never copy a stale
 enum from this skill into a paid command.
 
 For `seedance_2_0` or `seedance_2_0_mini`, read
-[seedance-2-0-production.md](references/seedance-2-0-production.md). Default to
-one controlled shot and 720p prototypes no longer than eight seconds. Compile
+[seedance-2-0-production.md](references/seedance-2-0-production.md). Use a
+controlled shot for load-bearing precision, or native multi-shot for two to
+four simple timed beats within one clip. Prototype at 720p and no longer than
+eight seconds when the chosen test permits it. Compile
 native audio on explicitly for the default no-dialogue native-sound route and
 the approved visible-dialogue audio-reference route. Compile it off only for
 intentional silence, off-screen narration, or a user-approved post-only repair. Use
-experimental timecoded multi-shot only after the user
-accepts whole-clip regeneration risk.
+native multi-shot only when exact dialogue, precise acting, and fragile object
+interaction are not load-bearing; explain that any failed beat may require
+regenerating the whole clip.
 
 Do not call the Higgsfield live cost endpoint or build economy, recommended, and
-highest-quality quote scenarios. After requirements are locked, ask the user for
-one total project credit ceiling and record explicit acceptance that jobs can be
-submitted without an exact provider quote:
+highest-quality quote scenarios. Ask for one total project credit ceiling and
+record acceptance that jobs can be submitted without an exact provider quote;
+`FULL` requires its requirement lock first:
 
 ```bash
 python3 "$SONOL_HIGGSFIELD_SKILL/scripts/sonol_higgsfield.py" approve-budget \
@@ -179,29 +218,30 @@ image guidance is an evidence-led exception: after a documented start-only
 failure, A/B test exactly one indispensable reference with every other variable
 held fixed. Never add a stack of speculative references.
 
-Before board approval, record the v8 start-image review: it is the final first
+Before paid managed generation, record the v9 start-image review: it is the final first
 frame, matches the requested aspect, contains no collage/labels, makes the key
 subject readable, supports the first action, and states off-frame-reveal risk.
 A technically sharp image can still be a poor motion initial condition.
 
-Move each asset through:
+For `FULL` and for load-bearing assets in `TARGETED`, move each asset through:
 
 `DRAFT -> INTERNAL_QC_PASSED -> USER_REVIEW -> USER_APPROVED -> LOCKED_FOR_VIDEO`
 
-Only the user may approve. If content or metadata changes, increment its
+Only the user may approve a locked board version. `LIGHT` does not require the
+entire asset workflow. If locked content or metadata changes, increment its
 version and invalidate the previous approval. Do not queue a final video from
 an asset that is not `LOCKED_FOR_VIDEO`.
 
-### 6. Generate one bounded shot at a time
+### 6. Generate with the routed unit of work
 
 Prefer Seedance 2.0 for serious general video. Respect the live reference and
 duration limits.
 
 Apply the minimum-sufficient image contract, enforced by the generation gate:
 
-- Every paid video call carries **exactly one start image** — the previous
-  accepted shot's boundary frame on a chain, or a freshly composed keyframe at
-  a cut/reset.
+- A managed image-to-video call carries one authoritative start image. Inherit
+  the previous accepted boundary only for a true continuous match; otherwise
+  use a freshly composed just-in-time keyframe.
 - Default `image_input_policy.mode=start_only`: no `image_references` and no
   `end_image`; describe the intended exit state in the prompt.
 - Escalate to `start_plus_essential_reference` only after persisting the failed
@@ -215,11 +255,13 @@ Apply the minimum-sufficient image contract, enforced by the generation gate:
 - If identity drifts late, first shorten/reset and improve the start image; only
   then test one essential identity reference under the documented A/B rule.
 
-Keep the prompt compact and high-probability: shot spec, subject and one
-action, one camera move, lighting and mood, an explicit instruction to begin
-from the supplied start-image composition without reframing before motion, and
-the exit state. Long
-enumerations of invariants and reference descriptions lower compliance.
+Use a minimum-sufficient prompt. Put the load-bearing action, expression,
+camera, object change, reveal, or exit state early; then include only the
+subject motion, one primary camera intent, relevant lighting, audio brief, and
+needed end state. A simple shot is usually short, while dialogue, emotion,
+transitions, and native multi-shot may need more words. Word ranges are warnings,
+not gates. Remove static re-description already supplied by the start image and
+long invariant lists, but never delete meaning only to hit a number.
 The compiler enforces the selected image-input profile, rejects an `end_image`
 outside `motivated_transition`, and emits at most three critical invariants.
 
@@ -303,7 +345,9 @@ unless a concrete provider or deterministic checker produced evidence.
 
 ### 8. Direct boundaries, verify continuity, and repair selectively
 
-Run the sequential adaptive loop after every accepted shot:
+Run the sequential adaptive loop for dependent `SERIAL_STORY` shots. A cut or
+reset still reviews the accepted clip for story consequences, but it does not
+require extracting or inheriting a boundary frame merely because one exists:
 
 1. Extract boundary candidates with `media_pipeline.py boundary-frames`. It
    persists eight frames from the final 0.5 seconds and scores each with FFmpeg
@@ -319,11 +363,10 @@ Boundary strategies:
 - `continuous_match`: the accepted previous boundary frame becomes the next
   `start_image`, alone. A pre-designed keyframe is analysis input for story
   re-alignment only — it is never transported in the video call.
-- `motivated_transition`: normally still use start-only plus a prompt exit
-  state. Add the planned keyframe as `end_image` only when an exact arrival is
-  more important than motion freedom, preferably in a dedicated simple bridge.
-  In `set-boundary`, omit `--planned-keyframe` for prompt-only; supplying it
-  explicitly selects the end-image profile.
+- `motivated_transition`: may inherit the prior boundary only when the action
+  truly continues; otherwise compose a new start image. Normally use start-only
+  plus a prompt exit state. Add a distinct `--end-keyframe` only when an exact
+  arrival is more important than motion freedom, preferably in a simple bridge.
 - `editorial_cut`: for reverse angles, reactions, inserts, decisive shot-size
   changes, or hard cuts, do not inherit the previous frame; compose a new
   start image now from locked references and the current story state.
@@ -341,42 +384,20 @@ SSIM, and PSNR as technical evidence only; framing, identity, and semantic
 composition still require visual judgment. The start image is strong guidance,
 not a pixel lock.
 
-Extract the accepted previous clip with `media_pipeline.py boundary-frames`,
-then persist the director decision with `sonol_higgsfield.py set-boundary`. For
-example:
+Use `media_pipeline.py boundary-frames` only for an inherited chain, then persist
+the decision with `set-boundary`. Record preparation with
+`record-start-image-review`; after generation use `compare-start-frame` and
+`record-start-frame-qc`. For inherited chains, also use
+`record-boundary-analysis` and bind the next plan with `set-adaptive-story`.
+Semantic pose, gaze, hands, props, framing, lighting, and emotion remain a
+director judgment, not an automatic score.
 
-```bash
-python3 "$SONOL_HIGGSFIELD_SKILL/scripts/sonol_higgsfield.py" set-boundary \
-  <production> <shot_id> continuous_match \
-  --previous-shot-id <previous_shot_id> --previous-frame <accepted_end.png> \
-  --planned-keyframe <current_keyframe.png> --reason "<director rationale>"
-python3 "$SONOL_HIGGSFIELD_SKILL/scripts/sonol_higgsfield.py" record-start-image-review \
-  <production> <shot_id> '<assessment-json>' PASSED --notes "<risk rationale>"
-python3 "$SONOL_HIGGSFIELD_SKILL/scripts/media_pipeline.py" compare-start-frame \
-  <submitted_start.png> <rendered_first.png>
-```
-
-After generation, persist first-frame comparison and the semantic boundary
-reading. The technical selector is deterministic; pose, gaze, hands, props,
-framing, lighting, and emotion remain an agent/director judgment that must be
-recorded rather than claimed as an automatic vision score:
-
-```bash
-python3 "$SONOL_HIGGSFIELD_SKILL/scripts/sonol_higgsfield.py" record-start-frame-qc \
-  <production> <shot_id> <rendered_first.png> PASSED
-python3 "$SONOL_HIGGSFIELD_SKILL/scripts/sonol_higgsfield.py" record-boundary-analysis \
-  <production> <shot_id> <selected_boundary.png> '<observations-json>' \
-  '<boundary-selection-json>' "<next-story adjustment>"
-python3 "$SONOL_HIGGSFIELD_SKILL/scripts/sonol_higgsfield.py" set-adaptive-story \
-  <production> <next_shot_id> '["BEAT_001"]' "<adjustment rationale>" \
-  NOT_APPLICABLE --previous-shot-id <shot_id>
-```
-
-Schema v8 blocks paid generation until the start image passes preparation
-review, and blocks the next shot until the immediate previous shot is generated,
-user-accepted, first-frame-QC passed, boundary-analyzed, and bound to the next
-adaptive plan. A cut/reset start image must carry just-in-time provenance after
-that previous shot. Chained shots must use the exact recorded boundary frame.
+Schema v9 blocks paid managed generation until the start image passes
+preparation review. `FULL` serial production also requires the locked story and
+adaptive plan. A cut/reset needs the previous shot accepted and a just-in-time
+start provenance, but does not require boundary analysis. An inherited chain
+additionally requires passed first-frame QC, boundary analysis, and the exact
+recorded boundary frame.
 
 Extract the end of the previous shot and the start of the next with
 `media_pipeline.py`. Compare face, hair, costume, body and hand pose, gaze,
@@ -410,22 +431,32 @@ shots, QC gaps, and any manual checks still required.
 
 ## Non-Negotiable Gates
 
-- Never start paid generation before requirements and budget are user-approved.
-- Never approve or queue a shot without a complete provider-compiled and validated `shot_grammar`.
+- Route the task before initializing Sonol. Prefer official Marketing Studio and
+  video-explainer workflows for their matching intents.
+- Every paid generation needs an explicit spend boundary or the provider's own
+  confirmation. Require the full requirements, story, board, asset, and
+  continuity approval chain only when the selected profile is `FULL`.
+- Never submit a managed shot without a provider-compiled, live-schema-validated
+  `shot_grammar`, prepared start image, explicit audio route, and applicable
+  `LIGHT`, `TARGETED`, or `FULL` gates.
 - Never add video-call image references speculatively. Default to start-only;
   after a recorded failure, allow exactly one essential reference as a
-  controlled A/B variable. Only a motivated transition may add an `end_image`.
-- Never pre-produce start frames beyond the next shot to generate; compose them
-  just-in-time from the current story state.
-- Never queue a dependent shot without a user-locked story contract, accepted
-  prior shot, boundary-analysis ID, passed first-frame QC, and matching JIT
-  start-image provenance.
+  controlled A/B variable. Only a motivated transition with a load-bearing
+  arrival composition may add an `end_image`.
+- Inherit the previous boundary frame only for true continuity. Cuts and resets
+  use just-in-time start images; they do not require boundary-frame analysis.
+- In `FULL` serial work, do not pre-produce start frames beyond the next shot.
+- Treat prompt length, shot splitting, performance cues, camera alternatives,
+  and failure classification as advisory unless a contradiction, live schema,
+  or paid-submission safety condition creates a real blocker.
 - Never treat recorded dialogue or narration as fixed without its approved
   SHA-256 fingerprint in both the audio plan and adaptive story snapshot.
 - Never accept a shot without comparing its actual first frame to the submitted
   start image.
 - Never treat SSIM, PSNR, or lowest blur as an automatic creative approval.
-- Never combine multiple primary camera moves unless the user accepts an experimental A/B test.
+- Prefer one primary camera move per controlled shot. Use a native multi-shot
+  plan when several simple timed beats serve the intent; do not force every
+  generation into one shot.
 - Never insert web `@character`, `@style`, `@motion`, or `@audio` aliases into a CLI prompt unless the live CLI schema explicitly exposes alias binding.
 - Never let Seedance inherit its current `generate_audio=true` default; compile an explicit shot audio route.
 - Never queue native audio without a complete compact sound brief covering
@@ -435,7 +466,8 @@ shots, QC gaps, and any manual checks still required.
 - Never present recent-actual arithmetic as a live quote, fixed price, or hard spending guarantee.
 - Never claim a lens number, camera preset, or prompt-soft instruction guarantees the rendered result.
 - Never infer user approval from silence, model output, or an earlier version.
-- Never generate final video from an unlocked asset or unapproved shot board.
+- In `TARGETED` or `FULL`, never generate from a required unlocked asset or an
+  unapproved load-bearing shot board. `LIGHT` deliberately omits the full board.
 - Never continue after the approved project ceiling is exhausted; request a renewed ceiling.
 - Never mark a shot final while required QC or adjacent-shot continuity fails.
 - Never report MCP, voice separation, OCR, lip-sync, or visual QC as successful

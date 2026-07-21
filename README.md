@@ -6,8 +6,8 @@ Turn a video idea into a controlled, reviewable Higgsfield production—not a pi
 of disconnected generation attempts.
 
 Sonol Higgsfield is an agent skill for Codex CLI, Claude Code, and compatible
-Agent Skills hosts. It gives your agent a production workflow for multi-shot
-films, ads, stories, campaigns, and narrated videos: requirements, storyboard,
+Agent Skills hosts. It routes small work to the lightest official path and gives
+your agent a managed production workflow for multi-job films, stories, and campaigns: requirements, storyboard,
 cinematography, references, budget approval, generation, continuity checks,
 audio routing, selective repair, finishing, and delivery.
 
@@ -89,6 +89,15 @@ Official setup references:
 
 ## Why use it?
 
+### Use only as much production system as the job needs
+
+The router chooses a quick official clip, a native Seedance multi-shot clip, a
+controlled precision shot, a serial Sonol production, or an official dedicated
+workflow. Marketing Studio remains first choice for ads and the official video
+explainer remains first choice for explainers. Approval depth is `LIGHT`,
+`TARGETED`, or `FULL`; the full interview and board are reserved for expensive,
+multi-job, or long productions.
+
 ### Make a film, not isolated clips
 
 The skill carries story state, characters, locations, props, camera direction,
@@ -111,26 +120,34 @@ calls or build three quote scenarios. When matching actual jobs exist, it shows
 clearly labeled reference arithmetic from observed credits per second; otherwise
 it says the estimate is unavailable. Silence never counts as approval.
 
-### Keep Seedance 2.0 disciplined
+### Keep Seedance 2.0 adaptive
 
-The default is one controlled action and one primary camera movement per short
-prototype. Experimental timecoded multi-shot generation is available only when
-you accept whole-clip regeneration risk.
+The skill chooses one controlled shot when dialogue, acting, product interaction,
+or camera precision is load-bearing. Two to four simple timecoded beats may use
+one native multi-shot generation when whole-clip regeneration is acceptable.
+Prompts are minimum-sufficient rather than universally short: the load-bearing
+instruction comes early and word ranges remain advisory.
 
 Each paid clip receives one start image. The first clip is composed up front;
-later clips either inherit an accepted boundary frame or compose a fresh frame
-just in time at a director-selected cut. Start-only is the default. One
+later clips inherit an accepted boundary frame only for true continuous action;
+other transitions compose a fresh frame just in time. Start-only is the default. One
 essential image reference is allowed only after a recorded failure and a
 one-variable A/B test; an end image is reserved for simple motivated transitions
 where exact arrival matters. FFmpeg persists eight candidates from the final
 0.5 seconds and recommends the least blurred, while the director may select a
-better narrative frame with a recorded reason. Schema v8 requires start-image
+better narrative frame with a recorded reason. Schema v9 requires start-image
 preflight for aspect, collage/labels, subject readability, first-action
 compatibility, and off-frame reveal risk. Optional SSIM/PSNR comparison is
-technical evidence, not automatic approval. First-frame QC, boundary analysis,
-locked story anchors, and previous user acceptance gate dependent generation.
+technical evidence, not automatic approval. Boundary analysis is required for
+inherited continuity, not for an editorial cut or scene reset. Full serial work
+also locks story anchors and prior user acceptance.
 The prompt exit state remains the default; an end image constrains only a simple
 exact-arrival transition and does not guarantee pixel-identical arrival.
+
+The built-in director aids add five small advisory tools: visible acting cues,
+two camera alternatives, prompt lint, explainable shot-complexity scoring, and
+attempt-history failure diagnosis. They never silently invent action, split a
+shot, choose a camera, or spend credits.
 
 ### Resume long productions safely
 
@@ -167,13 +184,13 @@ not a promise of sample-identical timing, timbre, or fidelity.
 
 ## Production flow
 
-1. Interview and lock the requirements.
-2. Create the persistent production state and dashboard.
-3. Write a timecoded script, scenes, assets, and shot plan.
+1. Route the intent to quick clip, native multi-shot, controlled shot, serial production, or an official dedicated workflow.
+2. For a managed route, choose `LIGHT`, `TARGETED`, or `FULL` approval depth and create state only when useful.
+3. Write the minimum necessary timecoded script, scenes, assets, and shot plan.
 4. Choose and validate film grammar for each shot.
 5. Inspect the live Higgsfield schema and credits, then approve a project ceiling.
 6. Approve animatics and references.
-7. Generate one bounded shot at a time.
+7. Generate one recoverable provider job at a time; a simple job may contain native multi-shot beats.
 8. Review continuity, audio, text, and technical quality immediately.
 9. Repair or selectively regenerate only the affected material.
 10. Assemble, finish, audit, and deliver the approved versions.

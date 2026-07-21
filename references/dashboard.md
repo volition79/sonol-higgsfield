@@ -25,11 +25,13 @@ does not contain credentials or OAuth state.
 
 - Project identity and final completion gauge.
 - Total/grammar-ready/generated/QC/final shot metrics.
-- Approval queue for requirements, project ceiling, assets, and shot boards.
+- Approval queue appropriate to the selected profile: requirements only in
+  `FULL`, plus the project ceiling and applicable assets/shot boards.
 - Active interlocks and recoverable blockers, including ambiguous submissions
   and known jobs whose remote status is temporarily unknown.
 - Shot table with board, grammar and generation state, model, QC count, version.
-- Per-shot grammar cards with intent, core camera choices, rationale, provider and support level.
+- Per-shot grammar cards with intent, core camera choices, rationale, provider,
+  support level, and the five compact director-intelligence summaries.
 - Asset version/lock/OCR state.
 - Reference-only arithmetic coverage, actual credits, pending reconciliation,
   approved project ceiling, and independent ceiling-breach status.

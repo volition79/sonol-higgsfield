@@ -14,10 +14,19 @@ from pathlib import Path
 from typing import Any, Iterable
 
 import cinematography
+import director_intelligence
 import execution_contract
 
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
+PRODUCTION_MODES = {
+    "QUICK_CLIP",
+    "NATIVE_MULTISHOT",
+    "CONTROLLED_SHOT",
+    "SERIAL_STORY",
+    "OFFICIAL_WORKFLOW",
+}
+APPROVAL_PROFILES = {"LIGHT", "TARGETED", "FULL"}
 REQUIRED_REQUIREMENTS = (
     "purpose",
     "core_message",
@@ -222,6 +231,8 @@ def default_boundary_plan() -> dict[str, Any]:
         "previous_boundary_frame": None,
         "planned_keyframe": None,
         "planned_keyframe_role": "none",
+        "end_keyframe": None,
+        "end_keyframe_role": "none",
         "cut_type": None,
         "reason": None,
         "start_image_provenance": {
@@ -327,7 +338,35 @@ def default_generation_attempts() -> dict[str, Any]:
     }
 
 
-def initialize(root: str | Path, name: str, template_dir: Path) -> Path:
+def default_production_policy() -> dict[str, Any]:
+    """Backwards-safe managed default; the router may select a lighter path."""
+    return {
+        "mode": "SERIAL_STORY",
+        "approval_profile": "FULL",
+        "official_workflow": None,
+        "managed_state": True,
+        "selected_by": None,
+        "selected_at": None,
+        "reason": "default for migrated and explicitly managed productions",
+    }
+
+
+def default_director_intelligence() -> dict[str, Any]:
+    return {
+        "performance_direction": None,
+        "camera_intent": None,
+        "prompt_lint": None,
+        "complexity": None,
+        "failure_analysis": None,
+    }
+
+
+def initialize(
+    root: str | Path,
+    name: str,
+    template_dir: Path,
+    production_policy: dict[str, Any] | None = None,
+) -> Path:
     production = _root(root)
     if production.exists() and any(production.iterdir()):
         raise StateError(f"production directory is not empty: {production}")
@@ -337,6 +376,17 @@ def initialize(root: str | Path, name: str, template_dir: Path) -> Path:
         (production / "media" / media_type).mkdir(parents=True, exist_ok=True)
     shutil.copytree(template_dir, production / "dashboard", dirs_exist_ok=True)
 
+    initial_policy = deepcopy(production_policy or default_production_policy())
+    if initial_policy.get("mode") not in PRODUCTION_MODES:
+        raise StateError("initial production policy has an invalid mode")
+    if initial_policy.get("approval_profile") not in APPROVAL_PROFILES:
+        raise StateError("initial production policy has an invalid approval profile")
+    if initial_policy.get("mode") == "OFFICIAL_WORKFLOW" and initial_policy.get("official_workflow") not in {"marketing_studio", "video_explainer"}:
+        raise StateError("official workflow mode requires marketing_studio or video_explainer")
+    if initial_policy.get("mode") != "OFFICIAL_WORKFLOW" and initial_policy.get("official_workflow") is not None:
+        raise StateError("official_workflow is only valid for OFFICIAL_WORKFLOW mode")
+    for key, value in default_production_policy().items():
+        initial_policy.setdefault(key, deepcopy(value))
     project = _base_document() | {
         "project": {
             "id": "PROJECT_001",
@@ -365,6 +415,7 @@ def initialize(root: str | Path, name: str, template_dir: Path) -> Path:
             "unpriced_job_risk_acknowledged": False,
         },
         "story_contract": default_story_contract(),
+        "production_policy": initial_policy,
     }
     requirements = _base_document() | {
         "fields": {
@@ -424,7 +475,7 @@ def migrate(root: str | Path) -> dict[str, Any]:
     if versions == {SCHEMA_VERSION}:
         return {"migrated": False, "schema_version": SCHEMA_VERSION}
     only_version = next(iter(versions)) if len(versions) == 1 else None
-    if only_version not in {1, 2, 3, 4, 5, 6, 7}:
+    if only_version not in {1, 2, 3, 4, 5, 6, 7, 8}:
         raise StateError(f"cannot migrate mixed or unsupported schema versions: {sorted(versions, key=str)}")
     assert isinstance(only_version, int)
     from_version = only_version
@@ -437,6 +488,7 @@ def migrate(root: str | Path) -> dict[str, Any]:
         else:
             binding = shot["shot_grammar"].setdefault("provider_binding", {})
             binding.setdefault("schema_contract_hash", None)
+            binding.setdefault("prompt_lint", None)
         shot.setdefault("seedance_plan", cinematography.default_seedance_plan())
         for key, value in cinematography.default_seedance_plan().items():
             shot["seedance_plan"].setdefault(key, deepcopy(value))
@@ -451,6 +503,8 @@ def migrate(root: str | Path) -> dict[str, Any]:
         references.setdefault("manifest", [])
         shot.setdefault("boundary", default_boundary_plan())
         boundary = shot["boundary"]
+        for key, value in default_boundary_plan().items():
+            boundary.setdefault(key, deepcopy(value))
         boundary.setdefault("start_image_provenance", deepcopy(default_boundary_plan()["start_image_provenance"]))
         shot.setdefault("story", default_shot_story())
         shot.setdefault("boundary_analysis", default_boundary_analysis())
@@ -498,6 +552,9 @@ def migrate(root: str | Path) -> dict[str, Any]:
         execution = generation.setdefault("execution", {"mode": None, "argv": []})
         execution.setdefault("fingerprint", None)
         generation.setdefault("active_attempt_id", None)
+        shot.setdefault("director_intelligence", default_director_intelligence())
+        for key, value in default_director_intelligence().items():
+            shot["director_intelligence"].setdefault(key, deepcopy(value))
         attempts = generation.setdefault("attempts", [])
         legacy_status = generation.get("status")
         legacy_job_id = generation.get("job_id")
@@ -533,6 +590,7 @@ def migrate(root: str | Path) -> dict[str, Any]:
         for attempt in attempts:
             if isinstance(attempt, dict):
                 attempt.setdefault("cost_uncertainty_acknowledged", False)
+                attempt.setdefault("review", None)
         if legacy_status == "GENERATING":
             generation["status"] = "SUBMITTED" if legacy_job_id else "SUBMISSION_AMBIGUOUS"
         elif legacy_status == "QUEUED" and not legacy_job_id:
@@ -546,6 +604,7 @@ def migrate(root: str | Path) -> dict[str, Any]:
     approval.setdefault("mode", "PROJECT_CEILING")
     approval.setdefault("unpriced_job_risk_acknowledged", approval.get("status") == "APPROVED")
     state["project"].setdefault("story_contract", default_story_contract())
+    state["project"].setdefault("production_policy", default_production_policy())
     costs = state["costs"]
     costs.pop("scenarios", None)
     costs.pop("task_estimates", None)
@@ -603,6 +662,116 @@ def invalidate_reference_estimates(root: str | Path, actor: str, reason: str) ->
     costs["updated_at"] = utc_now()
     atomic_write_json(costs_path, costs)
     append_history(root, "reference_estimates_invalidated", actor, "cost", "production", {"reason": reason})
+
+
+def set_production_policy(
+    root: str | Path,
+    mode: str,
+    approval_profile: str,
+    actor: str,
+    reason: str,
+    official_workflow: str | None = None,
+) -> None:
+    """Persist a routing decision without changing or cancelling provider jobs."""
+    if mode not in PRODUCTION_MODES:
+        raise StateError(f"invalid production mode: {mode}")
+    if approval_profile not in APPROVAL_PROFILES:
+        raise StateError(f"invalid approval profile: {approval_profile}")
+    if not reason.strip():
+        raise StateError("production policy reason is required")
+    if mode == "OFFICIAL_WORKFLOW" and official_workflow not in {"marketing_studio", "video_explainer"}:
+        raise StateError("official workflow mode requires marketing_studio or video_explainer")
+    if mode != "OFFICIAL_WORKFLOW" and official_workflow is not None:
+        raise StateError("official_workflow is only valid for OFFICIAL_WORKFLOW mode")
+    path = data_dir(root) / "project.json"
+    project = read_json(path)
+    project["production_policy"] = {
+        "mode": mode,
+        "approval_profile": approval_profile,
+        "official_workflow": official_workflow,
+        "managed_state": mode not in {"QUICK_CLIP", "OFFICIAL_WORKFLOW"},
+        "selected_by": actor,
+        "selected_at": utc_now(),
+        "reason": reason.strip(),
+    }
+    project["updated_at"] = utc_now()
+    atomic_write_json(path, project)
+    append_history(root, "production_policy_selected", actor, "project", "PROJECT_001", project["production_policy"])
+    sync_dashboard(root)
+
+
+def record_director_analysis(
+    root: str | Path,
+    shot_id: str,
+    category: str,
+    analysis: dict[str, Any],
+    actor: str,
+) -> None:
+    allowed = set(default_director_intelligence())
+    if category not in allowed:
+        raise StateError("invalid director-intelligence category: " + category)
+    if not isinstance(analysis, dict):
+        raise StateError("director analysis must be a JSON object")
+    path = data_dir(root) / "shots.json"
+    shots = read_json(path)
+    shot = _find(shots.get("items", []), shot_id, "shot")
+    shot.setdefault("director_intelligence", default_director_intelligence())[category] = deepcopy(analysis)
+    shot["updated_at"] = utc_now()
+    shots["updated_at"] = utc_now()
+    atomic_write_json(path, shots)
+    append_history(root, "director_analysis_recorded", actor, "shot", shot_id, {"category": category})
+    sync_dashboard(root)
+
+
+def record_attempt_review(
+    root: str | Path,
+    shot_id: str,
+    attempt_id: str,
+    result: str,
+    reject_reasons: list[str],
+    severity: str,
+    actor: str,
+    *,
+    human_confirmed: bool = False,
+    notes: str = "",
+) -> dict[str, Any]:
+    if result not in {"ACCEPTED", "REJECTED"}:
+        raise StateError("attempt review result must be ACCEPTED or REJECTED")
+    if severity not in {"MINOR", "MAJOR", "CRITICAL", "NONE"}:
+        raise StateError("invalid attempt review severity")
+    valid_reasons = set(director_intelligence._load("reject-reasons.json")["reasons"])
+    unknown = sorted(set(reject_reasons) - valid_reasons)
+    if unknown:
+        raise StateError("unknown reject reasons: " + ", ".join(unknown))
+    if result == "ACCEPTED" and reject_reasons:
+        raise StateError("accepted attempt must not carry reject reasons")
+    path = data_dir(root) / "shots.json"
+    shots = read_json(path)
+    shot = _find(shots.get("items", []), shot_id, "shot")
+    attempt = next((item for item in shot.get("generation", {}).get("attempts", []) if item.get("attempt_id") == attempt_id), None)
+    if attempt is None:
+        raise StateError(f"unknown generation attempt: {attempt_id}")
+    if not attempt.get("result_available"):
+        raise StateError("generation attempt cannot be reviewed before a provider result is available")
+    review = {
+        "result": result,
+        "reject_reasons": list(dict.fromkeys(reject_reasons)),
+        "severity": severity,
+        "human_confirmed": bool(human_confirmed),
+        "notes": notes or None,
+        "reviewed_by": actor,
+        "reviewed_at": utc_now(),
+    }
+    attempt["review"] = review
+    comparable = [item["review"] for item in shot["generation"]["attempts"] if isinstance(item.get("review"), dict)]
+    analysis = director_intelligence.diagnose_failures(comparable)
+    shot.setdefault("director_intelligence", default_director_intelligence())["failure_analysis"] = analysis
+    shot["updated_at"] = utc_now()
+    shots["updated_at"] = utc_now()
+    atomic_write_json(path, shots)
+    append_history(root, "generation_attempt_reviewed", actor, "shot", shot_id, {"attempt_id": attempt_id, "result": result, "reject_reasons": review["reject_reasons"]})
+    sync_dashboard(root)
+    return analysis
 
 
 def set_requirement(
@@ -686,7 +855,8 @@ def approve_budget(root: str | Path, max_credits: float, actor: str) -> None:
     project_path = data_dir(root) / "project.json"
     project = read_json(project_path)
     costs = read_json(data_dir(root) / "costs.json")
-    if project.get("requirements_lock", {}).get("status") != "LOCKED":
+    profile = ((project.get("production_policy") or {}).get("approval_profile") or "FULL")
+    if profile == "FULL" and project.get("requirements_lock", {}).get("status") != "LOCKED":
         raise StateError("requirements must be locked before budget approval")
     actual = float(costs.get("actual", {}).get("credits", 0) or 0)
     if max_credits < actual:
@@ -713,7 +883,7 @@ def approve_budget(root: str | Path, max_credits: float, actor: str) -> None:
         actor,
         "project",
         project["project"]["id"],
-        {"max_credits": max_credits, "live_quote_removed": True},
+        {"max_credits": max_credits, "live_quote_removed": True, "approval_profile": profile},
     )
     sync_dashboard(root)
 
@@ -859,6 +1029,7 @@ def add_shot(root: str | Path, shot_id: str, scene_id: str, title: str, order: i
             "manifest": [],
         },
         "seedance_plan": cinematography.default_seedance_plan(),
+        "director_intelligence": default_director_intelligence(),
         "approval_status": "DRAFT",
         "approved_by": None,
         "approved_at": None,
@@ -1007,6 +1178,7 @@ def set_boundary(
     previous_shot_id: str | None = None,
     previous_frame: str | None = None,
     planned_keyframe: str | None = None,
+    end_keyframe: str | None = None,
     cut_type: str | None = None,
 ) -> None:
     if strategy not in BOUNDARY_STRATEGIES:
@@ -1026,21 +1198,26 @@ def set_boundary(
             raise StateError("next boundary cannot be set before the previous sequential shot is generated")
         if chronological_previous.get("qc", {}).get("user_review") != "PASSED":
             raise StateError("next boundary cannot be set before previous user acceptance")
-        if (chronological_previous.get("start_frame_qc") or {}).get("status") != "PASSED":
-            raise StateError("next boundary cannot be set before previous start-frame QC passes")
         previous_analysis = chronological_previous.get("boundary_analysis") or {}
-        if previous_analysis.get("status") != "COMPLETE":
-            raise StateError("next boundary cannot be set before previous boundary analysis")
     references = deepcopy(shot.get("references") or {})
     # Reset every boundary to the minimum-sufficient baseline. A later explicit
     # recovery patch may add one evidenced essential image reference.
     references["images"] = []
     references["end"] = None
-    if strategy in {"continuous_match", "motivated_transition"}:
+    wants_inheritance = strategy == "continuous_match" or (
+        strategy == "motivated_transition" and bool(previous_shot_id or previous_frame)
+    )
+    if bool(previous_shot_id) != bool(previous_frame):
+        raise StateError("previous_shot_id and previous_frame must be supplied together")
+    if wants_inheritance:
         if not previous_shot_id or not previous_frame:
             raise StateError("continuous boundary requires previous_shot_id and previous_frame")
-        if chronological_previous_id is None or previous_shot_id != chronological_previous_id:
+        if chronological_previous is None or chronological_previous_id is None or previous_shot_id != chronological_previous_id:
             raise StateError("chained boundary must use the immediate previous sequential shot")
+        if (chronological_previous.get("start_frame_qc") or {}).get("status") != "PASSED":
+            raise StateError("inherited boundary requires previous start-frame QC to pass")
+        if previous_analysis.get("status") != "COMPLETE":
+            raise StateError("inherited boundary requires previous boundary analysis")
         if previous_frame != previous_analysis.get("frame_path"):
             raise StateError("chained boundary must use the selected previous boundary-analysis frame")
         references["start"] = previous_frame
@@ -1048,7 +1225,7 @@ def set_boundary(
         provenance = {"mode": "previous_boundary", "created_after_shot_id": previous_shot_id, "created_at": utc_now()}
     else:
         if not planned_keyframe:
-            raise StateError("editorial cut or scene reset requires a composed planned_keyframe start image")
+            raise StateError("non-inherited boundary requires a composed planned_keyframe start image")
         previous_shot_id = chronological_previous_id
         previous_frame = None
         references["start"] = planned_keyframe
@@ -1058,19 +1235,20 @@ def set_boundary(
             "created_after_shot_id": chronological_previous_id,
             "created_at": utc_now(),
         }
-    if strategy == "motivated_transition" and planned_keyframe:
-        references["end"] = planned_keyframe
-        role = "end_image"
-    elif strategy == "motivated_transition":
-        role = "none"
-    elif strategy == "continuous_match":
+    if wants_inheritance:
         # A pre-designed keyframe may inform story re-alignment and the prompt,
         # but it is never transported in the video call.
         role = "analysis_only" if planned_keyframe else "none"
     else:
         role = "start_image"
+    end_role = "none"
+    if end_keyframe:
+        if strategy != "motivated_transition":
+            raise StateError("end_keyframe is allowed only for a motivated transition")
+        references["end"] = end_keyframe
+        end_role = "end_image"
     image_input_policy = deepcopy(cinematography.default_seedance_plan()["image_input_policy"])
-    if strategy == "motivated_transition" and planned_keyframe:
+    if end_keyframe:
         image_input_policy.update({"mode": "start_end_transition", "rationale": reason.strip()})
     update_shot(
         root,
@@ -1083,6 +1261,8 @@ def set_boundary(
                 "previous_boundary_frame": previous_frame,
                 "planned_keyframe": planned_keyframe,
                 "planned_keyframe_role": role,
+                "end_keyframe": end_keyframe,
+                "end_keyframe_role": end_role,
                 "cut_type": cut_type,
                 "reason": reason,
                 "start_image_provenance": provenance,
@@ -1350,12 +1530,13 @@ def set_adaptive_story(
             raise StateError("adaptive story requires the previous generated shot")
         if previous.get("qc", {}).get("user_review") != "PASSED":
             raise StateError("adaptive story requires previous user acceptance")
-        if (previous.get("start_frame_qc") or {}).get("status") != "PASSED":
-            raise StateError("adaptive story requires previous start-frame QC")
-        analysis = previous.get("boundary_analysis") or {}
-        if analysis.get("status") != "COMPLETE":
-            raise StateError("adaptive story requires the previous boundary analysis")
-        analysis_id = analysis.get("analysis_id")
+        if (shot.get("boundary") or {}).get("inherit_previous_last_frame") is True:
+            if (previous.get("start_frame_qc") or {}).get("status") != "PASSED":
+                raise StateError("inherited adaptation requires previous start-frame QC")
+            analysis = previous.get("boundary_analysis") or {}
+            if analysis.get("status") != "COMPLETE":
+                raise StateError("inherited adaptation requires the previous boundary analysis")
+            analysis_id = analysis.get("analysis_id")
     audio = shot.get("audio") or {}
     master_hash = (
         audio.get("dialogue_reference_sha256")
@@ -1480,6 +1661,7 @@ def start_submission_attempt(
         "account_credits_after": None,
         "cost_uncertainty_acknowledged": bool(cost_uncertainty_acknowledged),
         "result_available": False,
+        "review": None,
     }
     attempts.append(attempt)
     generation.update(
@@ -1911,6 +2093,8 @@ def boundary_plan_errors(shot: dict[str, Any]) -> list[str]:
     role = plan.get("planned_keyframe_role")
     if role not in KEYFRAME_ROLES:
         return ["planned keyframe role is invalid"]
+    if plan.get("end_keyframe_role", "none") not in {"end_image", "none"}:
+        return ["end keyframe role is invalid"]
     errors: list[str] = []
     if not plan.get("reason"):
         errors.append("boundary director reason is missing")
@@ -1918,7 +2102,7 @@ def boundary_plan_errors(shot: dict[str, Any]) -> list[str]:
         errors.append("planned keyframe must not ride the video call as an undocumented image_reference")
     references = shot.get("references") or {}
     inherit = plan.get("inherit_previous_last_frame")
-    if strategy in {"continuous_match", "motivated_transition"}:
+    if strategy == "continuous_match" or (strategy == "motivated_transition" and inherit is True):
         if inherit is not True:
             errors.append("continuous boundary must inherit the previous last frame")
         if not plan.get("previous_shot_id"):
@@ -1929,13 +2113,19 @@ def boundary_plan_errors(shot: dict[str, Any]) -> list[str]:
         elif references.get("start") != previous_frame:
             errors.append("previous boundary frame must be transported as start_image")
     elif inherit is not False:
-        errors.append("editorial cut or scene reset must not inherit the previous last frame")
+        errors.append("non-continuous boundary must explicitly avoid previous-frame inheritance")
     if strategy == "motivated_transition":
-        if plan.get("planned_keyframe"):
-            if role != "end_image" or references.get("end") != plan.get("planned_keyframe"):
+        end_keyframe = plan.get("end_keyframe")
+        end_role = plan.get("end_keyframe_role")
+        if end_keyframe:
+            if end_role != "end_image" or references.get("end") != end_keyframe:
                 errors.append("motivated transition end keyframe is not transported as end_image")
-        elif role != "none" or references.get("end"):
+        elif end_role != "none" or references.get("end"):
             errors.append("prompt-only motivated transition must not carry an end keyframe")
+        if inherit is False and (
+            not plan.get("planned_keyframe") or references.get("start") != plan.get("planned_keyframe")
+        ):
+            errors.append("non-inherited motivated transition requires its composed keyframe as start_image")
     if strategy in {"editorial_cut", "scene_reset"}:
         if not plan.get("planned_keyframe") or references.get("start") != plan.get("planned_keyframe"):
             errors.append("cut/reset requires its composed planned keyframe as the start_image")
@@ -2157,23 +2347,24 @@ def sequential_adaptation_errors(state: dict[str, dict[str, Any]], shot: dict[st
     if previous.get("qc", {}).get("user_review") != "PASSED":
         errors.append("previous sequential shot lacks user acceptance")
     previous_analysis = previous.get("boundary_analysis") or {}
-    if previous_analysis.get("status") != "COMPLETE":
-        errors.append("previous sequential shot lacks boundary analysis")
-    if (previous.get("start_frame_qc") or {}).get("status") != "PASSED":
-        errors.append("previous sequential shot lacks passed start-frame QC")
     if story.get("based_on_previous_shot_id") != previous_id:
         errors.append("adaptive plan is not based on the immediate previous shot")
-    if story.get("based_on_boundary_analysis_id") != previous_analysis.get("analysis_id"):
-        errors.append("adaptive plan is not bound to the previous boundary analysis")
     if provenance.get("created_after_shot_id") != previous_id:
         errors.append("next start image was not created or inherited just in time after the previous shot")
     if not provenance.get("created_at"):
         errors.append("next start image has no JIT provenance timestamp")
-    strategy = (shot.get("boundary") or {}).get("strategy")
-    if strategy in {"continuous_match", "motivated_transition"}:
+    boundary = shot.get("boundary") or {}
+    strategy = boundary.get("strategy")
+    if boundary.get("inherit_previous_last_frame") is True:
+        if previous_analysis.get("status") != "COMPLETE":
+            errors.append("inherited boundary lacks previous boundary analysis")
+        if (previous.get("start_frame_qc") or {}).get("status") != "PASSED":
+            errors.append("inherited boundary lacks passed previous start-frame QC")
+        if story.get("based_on_boundary_analysis_id") != previous_analysis.get("analysis_id"):
+            errors.append("inherited adaptive plan is not bound to the previous boundary analysis")
         if (shot.get("references") or {}).get("start") != previous_analysis.get("frame_path"):
             errors.append("chained start image must equal the accepted previous boundary analysis frame")
-    elif provenance.get("mode") != "jit_composition":
+    elif strategy in {"motivated_transition", "editorial_cut", "scene_reset"} and provenance.get("mode") != "jit_composition":
         errors.append("cut/reset after the first shot must use a just-in-time composed start image")
     return errors
 
@@ -2181,26 +2372,34 @@ def sequential_adaptation_errors(state: dict[str, dict[str, Any]], shot: dict[st
 def shot_gate_errors(state: dict[str, dict[str, Any]], shot: dict[str, Any]) -> list[str]:
     errors: list[str] = []
     project = state["project"]
-    if project.get("requirements_lock", {}).get("status") != "LOCKED":
-        errors.append("requirements are not locked")
+    policy = project.get("production_policy") or default_production_policy()
+    profile = policy.get("approval_profile", "FULL")
+    if profile not in APPROVAL_PROFILES:
+        errors.append("production approval profile is invalid")
+        profile = "FULL"
     if project.get("cost_approval", {}).get("status") != "APPROVED":
         errors.append("cost ceiling is not approved")
-    if shot.get("approval_status") != "LOCKED_FOR_VIDEO":
-        errors.append("shot board is not locked for video")
-    assets = {item.get("id"): item for item in state["assets"].get("items", [])}
-    for asset_id in shot.get("required_asset_ids", []):
-        if assets.get(asset_id, {}).get("status") != "LOCKED_FOR_VIDEO":
-            errors.append(f"required asset is not locked: {asset_id}")
-    continuity = shot.get("continuity", {})
-    missing_context = [key for key, value in continuity.items() if not value]
-    if missing_context:
-        errors.append("continuity context missing: " + ", ".join(missing_context))
-    errors.extend(boundary_plan_errors(shot))
+    if profile == "FULL" and project.get("requirements_lock", {}).get("status") != "LOCKED":
+        errors.append("requirements are not locked")
+    if profile in {"TARGETED", "FULL"}:
+        if shot.get("approval_status") != "LOCKED_FOR_VIDEO":
+            errors.append("shot board is not locked for video")
+        assets = {item.get("id"): item for item in state["assets"].get("items", [])}
+        for asset_id in shot.get("required_asset_ids", []):
+            if assets.get(asset_id, {}).get("status") != "LOCKED_FOR_VIDEO":
+                errors.append(f"required asset is not locked: {asset_id}")
+        errors.extend(boundary_plan_errors(shot))
+    if profile == "FULL":
+        continuity = shot.get("continuity", {})
+        missing_context = [key for key, value in continuity.items() if not value]
+        if missing_context:
+            errors.append("continuity context missing: " + ", ".join(missing_context))
     errors.extend(start_image_policy_errors(shot))
     errors.extend(start_image_review_errors(shot))
     errors.extend(audio_plan_errors(shot))
-    errors.extend(story_contract_errors(state, shot))
-    errors.extend(sequential_adaptation_errors(state, shot))
+    if profile == "FULL":
+        errors.extend(story_contract_errors(state, shot))
+        errors.extend(sequential_adaptation_errors(state, shot))
     binding = shot.get("shot_grammar", {}).get("provider_binding", {})
     if binding.get("provider") in {"seedance_2_0", "seedance_2_0_mini"}:
         plan = shot.get("seedance_plan") or {}
@@ -2246,7 +2445,8 @@ def transition_generation(root: str | Path, shot_id: str, target: str, actor: st
     if target == "FINAL_COMPLETE":
         if (shot.get("start_frame_qc") or {}).get("status") != "PASSED":
             raise StateError("final gate failed; start-frame QC is not passed")
-        if (shot.get("boundary_analysis") or {}).get("status") != "COMPLETE":
+        approval_profile = ((state["project"].get("production_policy") or {}).get("approval_profile") or "FULL")
+        if approval_profile == "FULL" and (shot.get("boundary_analysis") or {}).get("status") != "COMPLETE":
             raise StateError("final gate failed; boundary analysis is incomplete")
         required_qc = ("technical", "transcript", "lip_sync", "visual", "continuity", "cinematography", "user_review")
         bad = [key for key in required_qc if shot.get("qc", {}).get(key) not in {"PASSED", "NOT_APPLICABLE"}]
@@ -2291,6 +2491,13 @@ def validate(root: str | Path) -> list[str]:
         ids = [item.get("id") for item in state[collection].get("items", [])]
         if len(ids) != len(set(ids)):
             errors.append(f"{collection}: duplicate ids")
+    policy = state["project"].get("production_policy") or {}
+    if policy.get("mode") not in PRODUCTION_MODES:
+        errors.append("project: invalid production mode")
+    if policy.get("approval_profile") not in APPROVAL_PROFILES:
+        errors.append("project: invalid approval profile")
+    if policy.get("mode") == "OFFICIAL_WORKFLOW" and policy.get("official_workflow") not in {"marketing_studio", "video_explainer"}:
+        errors.append("project: official workflow route is incomplete")
     if state["project"].get("requirements_lock", {}).get("status") == "LOCKED":
         for field in REQUIRED_REQUIREMENTS:
             if state["requirements"]["fields"].get(field, {}).get("status") != "CONFIRMED":
@@ -2371,7 +2578,8 @@ def aggregate(root: str | Path) -> dict[str, Any]:
         )[0]
     )
     blockers: list[str] = []
-    if state["project"].get("requirements_lock", {}).get("status") != "LOCKED":
+    policy = state["project"].get("production_policy") or default_production_policy()
+    if policy.get("approval_profile") == "FULL" and state["project"].get("requirements_lock", {}).get("status") != "LOCKED":
         blockers.append("요구사항 승인 필요")
     if state["project"].get("cost_approval", {}).get("status") != "APPROVED":
         blockers.append("비용 상한 승인 필요")

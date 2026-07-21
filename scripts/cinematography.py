@@ -11,6 +11,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
+import director_intelligence
+
 
 SKILL_ROOT = Path(__file__).resolve().parent.parent
 REFERENCES = SKILL_ROOT / "references"
@@ -203,6 +205,7 @@ def empty_grammar() -> dict[str, Any]:
             "compiled_prompt": None,
             "schema_verified_at": None,
             "schema_contract_hash": None,
+            "prompt_lint": None,
         },
         "qc_plan": [],
         "evidence": [],
@@ -210,7 +213,7 @@ def empty_grammar() -> dict[str, Any]:
 
 
 def default_seedance_plan() -> dict[str, Any]:
-    """Safe baseline: one short 720p shot with an explicit audio route."""
+    """Minimum-sufficient baseline; routing may select native multi-shot."""
     return {
         "mode": "controlled_single_shot",
         "shot_count": 1,
@@ -221,6 +224,8 @@ def default_seedance_plan() -> dict[str, Any]:
         "audio_mode": "post_only",
         "prototype": True,
         "timed_beats": [],
+        "prompt_kind": "simple",
+        "load_bearing_element": None,
         "camera_invariants": [],
         "image_input_policy": {
             "mode": "start_only",
@@ -237,6 +242,8 @@ def default_seedance_plan() -> dict[str, Any]:
             "music": None,
             "exclusions": [],
         },
+        # Retained only so v8 plans deserialize. Native multi-shot is now a
+        # routed production choice, not a blanket experimental exception.
         "experimental_approved": False,
     }
 
@@ -759,7 +766,7 @@ def _seedance_native_params(
                 raise CinematographyError("seedance_plan.image_input_policy must be an object")
             merged["image_input_policy"].update(policy)
         merged.update(copied)
-    if merged["mode"] not in {"controlled_single_shot", "seedance_multishot_experimental"}:
+    if merged["mode"] not in {"controlled_single_shot", "native_multishot", "seedance_multishot_experimental"}:
         raise CinematographyError(f"invalid Seedance production mode: {merged['mode']}")
     shot_count = merged.get("shot_count")
     if not isinstance(shot_count, int) or isinstance(shot_count, bool) or shot_count < 1:
@@ -770,10 +777,10 @@ def _seedance_native_params(
     if merged["mode"] == "controlled_single_shot":
         if shot_count != 1 or beats:
             raise CinematographyError("controlled_single_shot requires shot_count=1 and no timed beats")
-    elif not merged.get("experimental_approved"):
-        raise CinematographyError("experimental Seedance multi-shot requires explicit user approval")
     elif shot_count < 2 or len(beats) != shot_count:
-        raise CinematographyError("experimental Seedance multi-shot requires one timed beat per shot")
+        raise CinematographyError("native Seedance multi-shot requires one timed beat per shot")
+    elif shot_count > 4:
+        raise CinematographyError("native Seedance multi-shot is limited to four simple timed beats")
     audio_mode = merged.get("audio_mode")
     if audio_mode not in {"none", "native_sfx", "native_dialogue", "audio_reference", "post_only"}:
         raise CinematographyError(f"invalid Seedance audio mode: {audio_mode}")
@@ -921,8 +928,8 @@ def compile_prompt(
     if seedance_errors:
         raise CinematographyError("Seedance plan rejected:\n- " + "\n- ".join(seedance_errors))
     duration = grammar.get("duration_seconds")
-    if plan and plan["mode"] == "seedance_multishot_experimental":
-        header = f"{plan['shot_count']} shots / {duration}s / {plan['aspect_ratio']} / timecoded experimental sequence"
+    if plan and plan["mode"] in {"native_multishot", "seedance_multishot_experimental"}:
+        header = f"{plan['shot_count']} shots / {duration}s / {plan['aspect_ratio']} / timecoded sequence"
         beat_text = []
         for offset, beat in enumerate(plan["timed_beats"], 1):
             if not isinstance(beat, dict) or not beat.get("time") or not beat.get("action"):
@@ -943,10 +950,11 @@ def compile_prompt(
         compact_look = list(dict.fromkeys(look_terms))[:2]
         prompt_parts = [
             header,
-            "Begin from the supplied start-image composition without reframing before motion starts",
-            f"Subject and action: {subject.strip()}; {action.strip()}",
+            f"Action: {action.strip()}",
+            f"Subject: {subject.strip()}",
+            "Start from the supplied image; preserve its composition as motion begins",
             f"Camera: {', '.join(compact_camera)}",
-            f"Setting, light, and mood: {setting.strip()}; {', '.join(compact_look)}; {grammar.get('dramatic_beat') or ''}",
+            f"Setting and light: {setting.strip()}; {', '.join(compact_look)}; {grammar.get('dramatic_beat') or ''}",
             *beat_text,
             f"End state: {exit_state.strip()}",
         ]
@@ -980,6 +988,24 @@ def compile_prompt(
     if plan:
         prompt_parts.append(seedance_audio_prompt(plan))
     prompt = ". ".join(part for part in prompt_parts if part and part != " in")
+    prompt_lint = None
+    prompt_refinement = None
+    if plan:
+        load_bearing = plan.get("load_bearing_element") or action.strip()
+        prompt_refinement = director_intelligence.refine_prompt(
+            prompt,
+            kind=plan.get("prompt_kind") or ("multishot" if plan["mode"] != "controlled_single_shot" else "simple"),
+            load_bearing_element=load_bearing,
+        )
+        prompt = prompt_refinement["prompt"]
+        prompt_lint = prompt_refinement["lint"]
+        if prompt_lint["status"] == "BLOCKED":
+            messages = [item["message"] for item in prompt_lint["blockers"]]
+            raise CinematographyError("minimum-sufficient prompt lint failed:\n- " + "\n- ".join(messages))
+        warnings.extend(
+            f"prompt lint {item['code']}: advisory refinement recommended"
+            for item in prompt_lint["warnings"]
+        )
     schema_verified_at = None
     schema_contract_hash = None
     if profile.get("schema_required"):
@@ -1005,6 +1031,8 @@ def compile_prompt(
         "schema_verified_at": schema_verified_at,
         "schema_contract_hash": schema_contract_hash,
         "seedance_plan": plan,
+        "prompt_lint": prompt_lint,
+        "prompt_refinement": prompt_refinement,
     }
     return result
 
@@ -1081,6 +1109,7 @@ def apply_compilation(grammar: dict[str, Any], compiled: dict[str, Any]) -> dict
             "compiled_prompt": compiled["prompt"],
             "schema_verified_at": compiled.get("schema_verified_at"),
             "schema_contract_hash": compiled.get("schema_contract_hash"),
+            "prompt_lint": compiled.get("prompt_lint"),
         }
     )
     result["qc_plan"] = sorted(set(result.get("qc_plan", [])) | set(compiled.get("qc_checks", [])))

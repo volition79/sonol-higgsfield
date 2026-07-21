@@ -11,13 +11,15 @@
 
 ### A. Requirements
 
-Exit only when all required requirement fields are `CONFIRMED`, the user has
+For `FULL`, exit only when all required requirement fields are `CONFIRMED`, the user has
 reviewed the consolidated specification, and `requirements_lock.status` is
-`LOCKED`. A later requirement change unlocks it and invalidates reference-only arithmetic.
+`LOCKED`. A later requirement change unlocks it and invalidates reference-only
+arithmetic. `TARGETED` and `LIGHT` skip this phase exit and resolve only their
+load-bearing inputs.
 
 ### B. Script and plan
 
-Exit only when the timecoded script fits the approved duration, every scene and
+For `FULL`, exit only when the timecoded script fits the approved duration, every scene and
 shot has a stable ID, shot durations sum to the target, and each shot has all
 eight continuity fields. Keep one camera purpose, one primary action, and one
 primary camera movement per shot. Produce one to three intent-first grammar
@@ -25,7 +27,8 @@ recommendations, record the selected `shot_grammar` and rationale, compile it
 for the live provider contract, and require full grammar validation. Record
 planned edit points and one of the four incoming boundary strategies.
 The user must also lock a versioned, non-empty `story_contract.anchor_beats`
-list before paid generation.
+list before paid generation. `TARGETED` and `LIGHT` use only the applicable
+subset and may choose routed native multi-shot instead of separate shots.
 
 ### C. Credit ceiling
 
@@ -37,17 +40,17 @@ user's total ceiling.
 
 ### D. Assets
 
-Exit only when required character, location, prop, product, and graphic assets
+In `FULL`, exit only when required character, location, prop, product, and graphic assets
 have passed internal review and explicit user review, plus the **first shot's
 start frame only** — later start frames are composed just-in-time during
-generation (chained shots inherit the previous boundary frame; cuts and resets
+generation (true continuous chains inherit the previous boundary frame; cuts and resets
 compose a new one from the locked references and current story state).
 Korean-text assets also require OCR evidence. Final video consumes only
 versioned `LOCKED_FOR_VIDEO` assets.
 
 ### E. Shot board
 
-Exit per shot only after boundary strategy, the reviewed start image, selected
+In `TARGETED` or `FULL`, exit per load-bearing shot only after boundary strategy, the reviewed start image, selected
 image-input profile (start-only by default; one evidenced essential reference
 or motivated-transition end image only as an exception), prompt, duration, model, audio plan,
 continuity handoff, a complete compact brief for native production sound, and
@@ -60,16 +63,17 @@ Store the approved provider call and its generated fingerprint as
 
 ### F. Generation
 
-Generate one dependent shot at a time. Persist a submission attempt before the
+Generate one dependent provider job at a time; that job may contain one
+controlled shot or a routed native multi-shot sequence. Persist a submission attempt before the
 provider call, submit without waiting, and store the exact job ID immediately.
 Observe that known job in a separate reconcile command. Record the arguments,
 model contract snapshot, result path, provider observations, and actual credits. Inspect before the
 next shot that depends on its end state: compare the rendered first frame to
 the submitted start image, score eight boundary candidates from the final half
 second, record the director-selected frame and semantic observations, and bind
-the next shot to that analysis before compiling. Schema v8 also blocks paid
-generation without start-image preparation review and blocks out-of-order
-dependent generation or stale/pre-produced cut/reset start images.
+the next shot to that analysis only when the frame is inherited. Schema v9 also
+blocks paid generation without start-image preparation review. Cut/reset shots
+need accepted prior footage and a JIT start image, but not boundary analysis.
 
 ### G. QC and finish
 

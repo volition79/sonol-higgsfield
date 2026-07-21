@@ -235,6 +235,19 @@ class ProductionStateTests(unittest.TestCase):
         self.assertEqual(approval["mode"], "PROJECT_CEILING")
         self.assertTrue(approval["unpriced_job_risk_acknowledged"])
 
+    def test_light_policy_can_approve_spend_without_full_requirement_lock(self) -> None:
+        state.set_production_policy(
+            self.production,
+            "NATIVE_MULTISHOT",
+            "LIGHT",
+            "agent",
+            "one small native clip",
+        )
+        state.approve_budget(self.production, 2, "user")
+        project = state.read_json(state.data_dir(self.production) / "project.json")
+        self.assertEqual(project["requirements_lock"]["status"], "UNLOCKED")
+        self.assertEqual(project["cost_approval"]["status"], "APPROVED")
+
     def test_story_anchor_contract_requires_user_and_persists_version(self) -> None:
         beats = [{"id": "BEAT_001", "description": "The irreversible discovery"}]
         with self.assertRaisesRegex(state.StateError, "only the user"):
@@ -414,7 +427,67 @@ class ProductionStateTests(unittest.TestCase):
         self.assertEqual(shot["boundary"]["planned_keyframe_role"], "none")
         self.assertEqual(state.boundary_plan_errors(shot), [])
 
-    def test_next_shot_requires_accepted_analysis_and_jit_adaptation(self) -> None:
+    def test_motivated_transition_can_use_new_start_and_optional_exact_end(self) -> None:
+        self.lock_and_budget()
+        self.add_locked_asset()
+        state.add_scene(self.production, "SCENE_000", "Prelude", 0)
+        state.add_shot(self.production, "SHOT_000", "SCENE_000", "Approach", 0)
+        shots_path = state.data_dir(self.production) / "shots.json"
+        shots = state.read_json(shots_path)
+        previous = next(item for item in shots["items"] if item["id"] == "SHOT_000")
+        previous["generation"]["status"] = "GENERATED"
+        previous["qc"]["user_review"] = "PASSED"
+        state.atomic_write_json(shots_path, shots)
+        self.add_locked_shot()
+        state.set_boundary(
+            self.production,
+            "SHOT_001",
+            "motivated_transition",
+            "agent",
+            reason="new angle must land on the approved doorway composition",
+            planned_keyframe="media/images/SHOT_001_start.png",
+            end_keyframe="media/images/SHOT_001_end.png",
+        )
+        shot = next(item for item in state.read_json(shots_path)["items"] if item["id"] == "SHOT_001")
+        self.assertFalse(shot["boundary"]["inherit_previous_last_frame"])
+        self.assertEqual(shot["references"]["start"], "media/images/SHOT_001_start.png")
+        self.assertEqual(shot["references"]["end"], "media/images/SHOT_001_end.png")
+        self.assertEqual(shot["seedance_plan"]["image_input_policy"]["mode"], "start_end_transition")
+        self.assertEqual(state.boundary_plan_errors(shot), [])
+
+    def test_light_policy_skips_full_requirements_board_assets_and_continuity_gates(self) -> None:
+        self.lock_and_budget()
+        self.add_locked_asset()
+        self.add_locked_shot()
+        self.approve_current_shot_cost()
+        state.set_production_policy(
+            self.production,
+            "NATIVE_MULTISHOT",
+            "LIGHT",
+            "agent",
+            "one low-cost native clip with simple beats",
+        )
+        project_path = state.data_dir(self.production) / "project.json"
+        project = state.read_json(project_path)
+        project["requirements_lock"]["status"] = "UNLOCKED"
+        state.atomic_write_json(project_path, project)
+        assets_path = state.data_dir(self.production) / "assets.json"
+        assets = state.read_json(assets_path)
+        assets["items"][0]["status"] = "DRAFT"
+        state.atomic_write_json(assets_path, assets)
+        shots_path = state.data_dir(self.production) / "shots.json"
+        shots = state.read_json(shots_path)
+        shots["items"][0]["approval_status"] = "DRAFT"
+        shots["items"][0]["continuity"] = {key: None for key in shots["items"][0]["continuity"]}
+        state.atomic_write_json(shots_path, shots)
+        shot = state.read_json(shots_path)["items"][0]
+        errors = state.shot_gate_errors(state.load_all(self.production), shot)
+        self.assertFalse(any("requirements" in item for item in errors))
+        self.assertFalse(any("shot board" in item for item in errors))
+        self.assertFalse(any("required asset" in item for item in errors))
+        self.assertFalse(any("continuity context" in item for item in errors))
+
+    def test_editorial_cut_requires_acceptance_and_jit_start_not_boundary_analysis(self) -> None:
         self.lock_and_budget()
         self.add_locked_asset()
         self.add_locked_shot()
@@ -422,46 +495,6 @@ class ProductionStateTests(unittest.TestCase):
         self.complete_shot()
         state.set_qc(self.production, "SHOT_001", "user_review", "PASSED", "user")
         state.add_shot(self.production, "SHOT_002", "SCENE_001", "Reaction", 2)
-        with self.assertRaisesRegex(state.StateError, "previous start-frame QC"):
-            state.set_boundary(
-                self.production,
-                "SHOT_002",
-                "editorial_cut",
-                "agent",
-                reason="reverse angle after the discovery",
-                planned_keyframe="media/images/SHOT_002_start.png",
-            )
-        rendered_first = self.create_media_file("media/images/SHOT_001_rendered_first.png")
-        boundary_frame = self.create_media_file("media/images/SHOT_001_boundary.png")
-        state.record_start_frame_qc(self.production, "SHOT_001", rendered_first, "PASSED", "agent")
-        with self.assertRaisesRegex(state.StateError, "previous boundary analysis"):
-            state.set_adaptive_story(
-                self.production,
-                "SHOT_002",
-                ["BEAT_001"],
-                "react to the accepted hand position",
-                "NOT_APPLICABLE",
-                "agent",
-                "SHOT_001",
-            )
-        state.record_boundary_analysis(
-            self.production,
-            "SHOT_001",
-            boundary_frame,
-            {key: f"observed {key}" for key in state.BOUNDARY_OBSERVATION_FIELDS},
-            {
-                "selection_method": "lowest_ffmpeg_blurdetect_mean",
-                "window_seconds": 0.5,
-                "selected_timestamp": 4.75,
-                "selected_blur_score": 1.5,
-                "candidates": [
-                    {"timestamp": 4.6, "blur_score": 2.0},
-                    {"timestamp": 4.75, "blur_score": 1.5},
-                ],
-            },
-            "stage the reaction from the held-clue pose",
-            "agent",
-        )
         state.set_boundary(
             self.production,
             "SHOT_002",
@@ -485,6 +518,7 @@ class ProductionStateTests(unittest.TestCase):
             if item["id"] == "SHOT_002"
         )
         self.assertEqual(state.sequential_adaptation_errors(state.load_all(self.production), shot), [])
+        self.assertIsNone(shot["story"]["based_on_boundary_analysis_id"])
         shot["boundary"]["start_image_provenance"]["created_after_shot_id"] = "SHOT_000"
         self.assertTrue(any("just in time" in item for item in state.sequential_adaptation_errors(state.load_all(self.production), shot)))
 
@@ -995,6 +1029,40 @@ class ProductionStateTests(unittest.TestCase):
             4.0,
         )
 
+    def test_attempt_reviews_persist_and_drive_evidence_based_retry_strategy(self) -> None:
+        self.lock_and_budget()
+        self.add_locked_asset()
+        self.add_locked_shot()
+        self.approve_current_shot_cost()
+        self.complete_shot(job_id="job-review-1")
+        first = state.record_attempt_review(
+            self.production,
+            "SHOT_001",
+            "ATTEMPT_001",
+            "REJECTED",
+            ["CAMERA_MISS"],
+            "MAJOR",
+            "user",
+            human_confirmed=True,
+        )
+        self.assertEqual(first["classification"], "INSUFFICIENT_EVIDENCE")
+        state.transition_generation(self.production, "SHOT_001", "READY", "agent", "controlled retry")
+        self.complete_shot(job_id="job-review-2")
+        second = state.record_attempt_review(
+            self.production,
+            "SHOT_001",
+            "ATTEMPT_002",
+            "REJECTED",
+            ["CAMERA_MISS"],
+            "MAJOR",
+            "user",
+            human_confirmed=True,
+        )
+        self.assertEqual(second["classification"], "SYSTEMATIC")
+        self.assertEqual(second["next_action"], "CHANGE_ONE_VARIABLE")
+        shot = state.read_json(state.data_dir(self.production) / "shots.json")["items"][0]
+        self.assertTrue(shot["generation"]["attempts"][1]["review"]["human_confirmed"])
+
     def test_shot_grammar_is_required_and_edits_invalidate_approval(self) -> None:
         state.add_scene(self.production, "SCENE_EMPTY", "Unplanned", 0)
         state.add_shot(self.production, "SHOT_EMPTY", "SCENE_EMPTY", "Unplanned", 0)
@@ -1027,6 +1095,38 @@ class ProductionStateTests(unittest.TestCase):
         self.assertIn("shot_grammar", shot)
         self.assertEqual(shot["qc"]["cinematography"], "PENDING")
         self.assertIn("boundary_analysis", shot)
+        self.assertIn("start_frame_qc", shot)
+        self.assertIn("story", shot)
+        self.assertIn("start_image_review", shot)
+        self.assertEqual(
+            state.read_json(state.data_dir(self.production) / "project.json")["schema_version"],
+            state.SCHEMA_VERSION,
+        )
+        self.assertFalse(state.validate(self.production))
+
+    def test_explicit_v8_migration_adds_adaptive_policy_and_director_state(self) -> None:
+        state.add_scene(self.production, "SCENE_OLD", "Old", 1)
+        state.add_shot(self.production, "SHOT_OLD", "SCENE_OLD", "Old shot", 1)
+        for name in state.DATA_FILES:
+            path = state.data_dir(self.production) / name
+            document = state.read_json(path)
+            document["schema_version"] = 8
+            if name == "project.json":
+                document.pop("production_policy", None)
+            if name == "shots.json":
+                shot = document["items"][0]
+                shot.pop("director_intelligence", None)
+                shot["boundary"].pop("end_keyframe", None)
+                shot["boundary"].pop("end_keyframe_role", None)
+                shot["shot_grammar"]["provider_binding"].pop("prompt_lint", None)
+            state.atomic_write_json(path, document)
+        result = state.migrate(self.production)
+        self.assertTrue(result["migrated"])
+        project = state.read_json(state.data_dir(self.production) / "project.json")
+        shot = state.read_json(state.data_dir(self.production) / "shots.json")["items"][0]
+        self.assertEqual(project["production_policy"]["approval_profile"], "FULL")
+        self.assertIn("complexity", shot["director_intelligence"])
+        self.assertIn("end_keyframe", shot["boundary"])
         self.assertIn("start_frame_qc", shot)
         self.assertIn("story", shot)
         self.assertIn("start_image_review", shot)
