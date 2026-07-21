@@ -696,12 +696,17 @@ class ProductionStateTests(unittest.TestCase):
 
     def test_provider_job_id_accepts_only_known_envelopes(self) -> None:
         # The live hf CLI returns job objects (or a list of them) whose
-        # identifier key is a plain "id"; non-dict payloads are rejected.
+        # identifier key is a plain "id". Some releases instead return a
+        # one-item UUID array, which is accepted without opening parsing to
+        # arbitrary string payloads.
+        job_uuid = "1f5cc4f1-98bd-42de-92dd-27a9f704cc53"
         self.assertEqual(run_shot.provider_job_id({"id": "job-001"}), "job-001")
         self.assertEqual(run_shot.provider_job_id([{"id": "job-001"}]), "job-001")
         self.assertEqual(run_shot.provider_job_id({"data": {"job_id": "job-001"}}), "job-001")
+        self.assertEqual(run_shot.provider_job_id([job_uuid]), job_uuid)
         self.assertIsNone(run_shot.provider_job_id("job-001"))
         self.assertIsNone(run_shot.provider_job_id(["job-001"]))
+        self.assertIsNone(run_shot.provider_job_id([job_uuid, {"id": "job-002"}]))
         self.assertIsNone(run_shot.provider_job_id({"credits": 5}))
 
     def test_provider_status_incident_fixture_is_fail_open_for_unknown_states(self) -> None:

@@ -136,6 +136,28 @@ inspection, but generation runs through `generate create` with execution mode
 are minimum-sufficient rather than universally short, and the first frame
 defaults to match-then-release so camera motion can deliberately reframe.
 
+Before paying for a representative shot, inspect the current contract and ask
+the advisory router which provider best matches the shot's real load-bearing
+requirements:
+
+```bash
+python3 scripts/inspect_live_schema.py \
+  --model cinematic_studio_video_3_5 \
+  --output production/data/higgsfield-live-schema.json
+
+python3 scripts/director_intelligence.py route film 8 1 \
+  --camera-load-bearing \
+  --look-load-bearing \
+  --visual-priority expressive
+```
+
+The router explains its choice; it does not submit a job. For Cinema 3.5 the
+compiler binds the validated `camera_style`, `light_scheme`, `color_grading`,
+and `genre` fields, keeps exact movement/lens direction in the prompt, stores
+execution mode `model`, and then uses the guarded `generate create` path. When
+the choice is uncertain, run one representative A/B shot instead of switching
+the whole production by assumption.
+
 Each paid clip receives one start image. The first clip is composed up front;
 later clips inherit an accepted boundary frame only for true continuous action;
 other transitions compose a fresh frame just in time. Start-only is the default. One
@@ -169,6 +191,9 @@ retry; an interrupted wait keeps the known job ID. Provider completion and
 actual cost are always recorded even if local policies changed afterward.
 Missing credits remain reconcilable evidence, while above-ceiling actual usage
 is preserved and flagged rather than rejected from the ledger.
+Known CLI response envelopes include job objects, nested IDs, and the observed
+one-item UUID array. Moderation-terminal states such as `nsfw`, `moderated`, and
+`blocked` are recorded as provider failures rather than left in a ghost queue.
 
 ### Repair only what failed
 
