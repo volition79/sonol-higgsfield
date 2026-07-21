@@ -18,7 +18,7 @@ import director_intelligence
 import execution_contract
 
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 PRODUCTION_MODES = {
     "QUICK_CLIP",
     "NATIVE_MULTISHOT",
@@ -353,6 +353,7 @@ def default_production_policy() -> dict[str, Any]:
 
 def default_director_intelligence() -> dict[str, Any]:
     return {
+        "provider_strategy": None,
         "performance_direction": None,
         "camera_intent": None,
         "prompt_lint": None,
@@ -475,7 +476,7 @@ def migrate(root: str | Path) -> dict[str, Any]:
     if versions == {SCHEMA_VERSION}:
         return {"migrated": False, "schema_version": SCHEMA_VERSION}
     only_version = next(iter(versions)) if len(versions) == 1 else None
-    if only_version not in {1, 2, 3, 4, 5, 6, 7, 8}:
+    if only_version not in {1, 2, 3, 4, 5, 6, 7, 8, 9}:
         raise StateError(f"cannot migrate mixed or unsupported schema versions: {sorted(versions, key=str)}")
     assert isinstance(only_version, int)
     from_version = only_version
@@ -497,6 +498,9 @@ def migrate(root: str | Path) -> dict[str, Any]:
         )
         for key, value in cinematography.default_seedance_plan()["image_input_policy"].items():
             image_policy.setdefault(key, deepcopy(value))
+        shot.setdefault("cinema35_plan", cinematography.default_cinema35_plan())
+        for key, value in cinematography.default_cinema35_plan().items():
+            shot["cinema35_plan"].setdefault(key, deepcopy(value))
         if from_version <= 4 and shot["seedance_plan"].get("audio_mode") == "none":
             shot["seedance_plan"]["audio_mode"] = "post_only"
         references = shot.setdefault("references", {})
@@ -1029,6 +1033,7 @@ def add_shot(root: str | Path, shot_id: str, scene_id: str, title: str, order: i
             "manifest": [],
         },
         "seedance_plan": cinematography.default_seedance_plan(),
+        "cinema35_plan": cinematography.default_cinema35_plan(),
         "director_intelligence": default_director_intelligence(),
         "approval_status": "DRAFT",
         "approved_by": None,
@@ -1083,6 +1088,7 @@ def update_shot(root: str | Path, shot_id: str, patch: dict[str, Any], actor: st
         "execution",
         "shot_grammar",
         "seedance_plan",
+        "cinema35_plan",
         "story",
         "start_image_review",
     }
@@ -1133,7 +1139,7 @@ def update_shot(root: str | Path, shot_id: str, patch: dict[str, Any], actor: st
         isinstance(normalized.get("seedance_plan"), dict)
         and "image_input_policy" in normalized["seedance_plan"]
     )
-    for nested in ("continuity", "boundary", "references", "audio", "seedance_plan", "story", "start_image_review"):
+    for nested in ("continuity", "boundary", "references", "audio", "seedance_plan", "cinema35_plan", "story", "start_image_review"):
         if nested in normalized:
             value = normalized.pop(nested)
             if not isinstance(value, dict):
@@ -1161,7 +1167,7 @@ def update_shot(root: str | Path, shot_id: str, patch: dict[str, Any], actor: st
     append_history(root, "shot_updated", actor, "shot", shot_id, {"fields": sorted(patch)})
     cost_fields = {
         "duration_seconds", "references", "model",
-        "execution", "seedance_plan", "shot_grammar",
+        "execution", "seedance_plan", "cinema35_plan", "shot_grammar",
     }
     if cost_fields & set(patch):
         invalidate_reference_estimates(root, actor, "shot execution profile changed: " + ", ".join(sorted(cost_fields & set(patch))))
@@ -2212,7 +2218,12 @@ def audio_plan_errors(shot: dict[str, Any]) -> list[str]:
     route = audio.get("route")
     if route not in AUDIO_ROUTES:
         return ["audio route is undecided or invalid"]
-    audio_mode = (shot.get("seedance_plan") or {}).get("audio_mode")
+    provider = (shot.get("shot_grammar", {}).get("provider_binding") or {}).get("provider")
+    is_cinema35 = provider == "cinematic_studio_video_3_5"
+    provider_plan = (
+        (shot.get("cinema35_plan") or {}) if is_cinema35 else (shot.get("seedance_plan") or {})
+    )
+    audio_mode = provider_plan.get("audio_mode")
     errors: list[str] = []
     if route in {"NO_DIALOGUE_POST", "OFFSCREEN_NARRATION"} and audio_mode != "post_only":
         errors.append("non-visible speech routes must generate picture with audio_mode=post_only")
@@ -2241,17 +2252,17 @@ def audio_plan_errors(shot: dict[str, Any]) -> list[str]:
         if (shot.get("references") or {}).get("audios"):
             errors.append("no-dialogue native-sound route must not carry audio_references")
         if audio.get("generated_track_policy") != "PRESERVE":
-            errors.append("no-dialogue native-sound route must preserve the Seedance native track")
+            errors.append("no-dialogue native-sound route must preserve the provider native track")
         if audio.get("final_mix_required") is not False:
             errors.append("no-dialogue native-sound route must not require a creative external mix")
         errors.extend(
             "no-dialogue native sound " + message
             for message in cinematography.validate_sound_design(
-                (shot.get("seedance_plan") or {}).get("sound_design"), require_complete=True
+                provider_plan.get("sound_design"), require_complete=True
             )
         )
         if not cinematography.is_no_dialogue_brief(
-            ((shot.get("seedance_plan") or {}).get("sound_design") or {}).get("dialogue")
+            (provider_plan.get("sound_design") or {}).get("dialogue")
         ):
             errors.append(
                 "no-dialogue native sound requires sound_design.dialogue to explicitly say none or no dialogue"
@@ -2259,6 +2270,10 @@ def audio_plan_errors(shot: dict[str, Any]) -> list[str]:
     if route == "INTENTIONAL_SILENCE" and audio.get("final_mix_required") is not False:
         errors.append("intentional silence must not require a final external mix")
     if route == "VISIBLE_DIALOGUE_V3_REFERENCE_NATIVE_AUDIO":
+        if is_cinema35:
+            errors.append(
+                "visible-dialogue V3 conditioning is production-proven only on the Seedance route; Cinema 3.5 requires an explicit A/B before adoption"
+            )
         if audio_mode != "audio_reference":
             errors.append("visible dialogue must use the locked ElevenLabs reference as audio_reference")
         if audio.get("voice_provider") != "elevenlabs" or audio.get("voice_model") != "eleven_v3":
@@ -2409,6 +2424,14 @@ def shot_gate_errors(state: dict[str, dict[str, Any]], shot: dict[str, Any]) -> 
             errors.append("Seedance aspect ratio does not match locked project requirements")
         if required_resolution and plan.get("resolution") != required_resolution:
             errors.append("Seedance resolution does not match locked project requirements")
+    elif binding.get("provider") == "cinematic_studio_video_3_5":
+        plan = shot.get("cinema35_plan") or {}
+        required_aspect = project.get("project", {}).get("aspect_ratio")
+        required_resolution = project.get("project", {}).get("resolution")
+        if required_aspect and plan.get("aspect_ratio") != required_aspect:
+            errors.append("Cinema 3.5 aspect ratio does not match locked project requirements")
+        if required_resolution and plan.get("resolution") != required_resolution:
+            errors.append("Cinema 3.5 resolution does not match locked project requirements")
     grammar_errors, _ = cinematography.validate_grammar(
         shot.get("shot_grammar", {}), require_complete=True, shot_duration=shot.get("duration_seconds")
     )

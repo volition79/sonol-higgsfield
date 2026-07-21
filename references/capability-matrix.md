@@ -19,7 +19,7 @@ orchestration supplied by this skill.
 | Script/timecode/shot decomposition | Not a provider contract | Partial workflow guidance | No evidence | Required durable scene/shot state |
 | Professional film grammar catalog | Camera controls and Cinema fields cover a subset | Prompt/routing examples | Exact tools must be visible | 15 axes, 148 source-linked techniques, aliases, failures and QC |
 | Intent-to-technique recommendation | Not a deterministic backend feature | Conversational guidance | No evidence | Deterministic 1–3 options with plain rationale and genre/platform priors |
-| Provider-specific camera compilation | Cinema 3.5 has structured style/light/grade; other models accept prompts/references | Model-specific guidance | Only after live schema | Native/reference/prompt/web/post support classifier and live-schema validation |
+| Provider-specific camera compilation | Cinema 3.5 has structured style/light/grade/genre; exact moves remain prompt-soft | Model-specific guidance | Only after live schema | Per-shot Seedance/Cinema routing, native-axis compiler, first-frame release policy, and live-schema validation |
 | Camera-technique compliance scoring | No deterministic guarantee | Manual inspection | No proven score | Conflict checks before generation and explicit cinematography QC after generation |
 | Asset and shot approvals | Not a provider contract | Conversational gates only | No evidence | Versioned state machines and user-only authority |
 | Cross-shot continuity | References help generation | Prompt/reference advice | No semantic automatic score confirmed | Four boundary strategies, persisted final-0.5s candidates, blur recommendation plus director override, first-frame evidence/QC, and sequential/JIT state gates |
@@ -53,7 +53,7 @@ orchestration supplied by this skill.
 - Redacted live CLI/model/workflow/account/MCP preflight.
 - Korean/English OCR text-presence checker.
 - FFmpeg/ffprobe finishing helpers.
-- Schema v9 adaptive approval profiles, production routing, story-anchor,
+- Schema v10 adaptive approval profiles, per-shot Cinema/Seedance routing, story-anchor,
   director-intelligence summaries, adaptive-analysis, start-image preparation,
   optional SSIM/PSNR first-frame evidence, director boundary selection, JIT provenance,
   compact native sound brief, generated-track policy, and recorded-reference

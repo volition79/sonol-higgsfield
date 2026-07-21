@@ -18,6 +18,13 @@ new actions, silently split a shot, choose a camera, or spend credits.
   video-explainer workflow for explainers. Sonol may add audit or QC, but must
   not replace the official workflow by default.
 
+Production mode and provider are separate decisions. Route expressive,
+camera/load-bearing look shots toward Cinema Studio 3.5; route proven V3
+visible dialogue, continuity, precise performance, fragile object interaction,
+and native timecoded sequences toward Seedance. A balanced tie remains an
+explicit selection, not a hidden default. See
+[cinema-studio-3-5-production.md](cinema-studio-3-5-production.md).
+
 Approval profiles are `LIGHT`, `TARGETED`, and `FULL`. `FULL` is reserved for
 high-cost, multi-job, or long-running productions. Every paid submission still
 needs an explicit spend boundary or the provider's own confirmation.
@@ -27,8 +34,9 @@ needs an explicit spend boundary or the provider's own confirmation.
 1. Performance direction converts an abstract emotion into no more than three
    observable cues from body channels visible in the actual framing.
 2. Camera recommendation returns at most two alternatives: emotion-following
-   and emotion-contrasting. The director or user chooses; support is soft until
-   the live provider schema proves otherwise.
+   and emotion-contrasting. The director or user chooses. Cinema 3.5 may bind a
+   broad `camera_style` family natively, while the exact move remains soft until
+   a live contract exposes it as a separate field.
 3. Prompt lint uses a minimum-sufficient target, not a universal short limit.
    It prioritizes the load-bearing element, warns about ambiguity and abstract
    direction, and blocks only genuine contradictions. It cannot invent detail.

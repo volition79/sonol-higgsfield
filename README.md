@@ -120,13 +120,21 @@ calls or build three quote scenarios. When matching actual jobs exist, it shows
 clearly labeled reference arithmetic from observed credits per second; otherwise
 it says the estimate is unavailable. Silence never counts as approval.
 
-### Keep Seedance 2.0 adaptive
+### Route Cinema Studio 3.5 and Seedance per shot
 
-The skill chooses one controlled shot when dialogue, acting, product interaction,
-or camera precision is load-bearing. Two to four simple timecoded beats may use
-one native multi-shot generation when whole-clip regeneration is acceptable.
-Prompts are minimum-sufficient rather than universally short: the load-bearing
-instruction comes early and word ranges remain advisory.
+There is no universal serious-video default. Cinema Studio 3.5 is preferred when
+camera character or genre, lighting, and grade are load-bearing; its broad
+camera-style, light, color, and genre axes compile to live structured fields.
+Exact dolly, pan, orbit, crane, lens, and aperture direction remains prompt-soft.
+Seedance remains preferred for the proven ElevenLabs V3 visible-dialogue route,
+continuity-first work, precise acting/object interaction, and native timecoded
+multi-shot. Balanced cases stay explicit A/B decisions.
+
+CLI 1.1.19 exposes the Cinema 3.5 contract under both model and workflow
+inspection, but generation runs through `generate create` with execution mode
+`model`; the skill prevents the unsupported `generate workflow` call. Prompts
+are minimum-sufficient rather than universally short, and the first frame
+defaults to match-then-release so camera motion can deliberately reframe.
 
 Each paid clip receives one start image. The first clip is composed up front;
 later clips inherit an accepted boundary frame only for true continuous action;
@@ -135,7 +143,7 @@ essential image reference is allowed only after a recorded failure and a
 one-variable A/B test; an end image is reserved for simple motivated transitions
 where exact arrival matters. FFmpeg persists eight candidates from the final
 0.5 seconds and recommends the least blurred, while the director may select a
-better narrative frame with a recorded reason. Schema v9 requires start-image
+better narrative frame with a recorded reason. Schema v10 requires start-image
 preflight for aspect, collage/labels, subject readability, first-action
 compatibility, and off-frame reveal risk. Optional SSIM/PSNR comparison is
 technical evidence, not automatic approval. Boundary analysis is required for

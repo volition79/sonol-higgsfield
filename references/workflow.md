@@ -71,7 +71,7 @@ model contract snapshot, result path, provider observations, and actual credits.
 next shot that depends on its end state: compare the rendered first frame to
 the submitted start image, score eight boundary candidates from the final half
 second, record the director-selected frame and semantic observations, and bind
-the next shot to that analysis only when the frame is inherited. Schema v9 also
+the next shot to that analysis only when the frame is inherited. Schema v10 also
 blocks paid generation without start-image preparation review. Cut/reset shots
 need accepted prior footage and a JIT start image, but not boundary analysis.
 

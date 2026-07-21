@@ -101,6 +101,13 @@ def technique_index(catalog: dict[str, Any]) -> dict[str, dict[str, Any]]:
     return {item["id"]: item for item in catalog.get("techniques", []) if isinstance(item, dict)}
 
 
+def technique_prompt(index: dict[str, dict[str, Any]], identifier: Any) -> str | None:
+    if not isinstance(identifier, str):
+        return None
+    value = index.get(identifier, {}).get("prompt")
+    return value if isinstance(value, str) and value.strip() else None
+
+
 def validate_knowledge(
     catalog: dict[str, Any], genres: dict[str, Any], support: dict[str, Any]
 ) -> list[str]:
@@ -227,6 +234,7 @@ def default_seedance_plan() -> dict[str, Any]:
         "prompt_kind": "simple",
         "load_bearing_element": None,
         "camera_invariants": [],
+        "start_frame_behavior": "match_then_release",
         "image_input_policy": {
             "mode": "start_only",
             "rationale": None,
@@ -246,6 +254,46 @@ def default_seedance_plan() -> dict[str, Any]:
         # routed production choice, not a blanket experimental exception.
         "experimental_approved": False,
     }
+
+
+def default_cinema35_plan() -> dict[str, Any]:
+    """Live Cinema Studio 3.5 workflow settings plus conservative internal policy."""
+    return {
+        "visual_priority": "balanced",
+        "camera_style": None,
+        "light_scheme": None,
+        "color_grading": None,
+        "genre": "auto",
+        "aspect_ratio": "auto",
+        "resolution": "720p",
+        "prompt_language": "en",
+        "enhance_prompt": False,
+        "audio_mode": "none",
+        "sound_design": deepcopy(default_seedance_plan()["sound_design"]),
+        "multi_shots": False,
+        "multi_shot_mode": "custom",
+        "multi_prompt": [],
+        "style_prompt": None,
+        "start_frame_behavior": "match_then_release",
+        "prompt_kind": "simple",
+        "load_bearing_element": None,
+        "camera_invariants": [],
+    }
+
+
+START_FRAME_BEHAVIORS = {
+    "preserve_composition",
+    "match_then_release",
+    "identity_anchor_only",
+}
+
+
+def start_frame_prompt(behavior: str) -> str:
+    if behavior == "preserve_composition":
+        return "Match the supplied first frame and preserve its initial composition as motion begins"
+    if behavior == "identity_anchor_only":
+        return "Use the supplied first frame as the identity and spatial anchor; deliberate reframing may begin immediately"
+    return "Match the supplied first frame, then let the planned camera move reframe naturally"
 
 
 def validate_image_input_policy(value: Any) -> list[str]:
@@ -290,7 +338,7 @@ def validate_image_input_policy(value: Any) -> list[str]:
 
 
 def validate_sound_design(value: Any, *, require_complete: bool = False) -> list[str]:
-    """Validate the compact sound brief compiled into a Seedance prompt."""
+    """Validate a compact native-generation sound brief."""
     if not isinstance(value, dict):
         return ["seedance_plan.sound_design must be an object"]
     allowed = {"dialogue", "ambience", "synchronized_effects", "music", "exclusions"}
@@ -341,6 +389,17 @@ def seedance_audio_prompt(plan: dict[str, Any]) -> str:
         f"ambience: {sound['ambience']}; synchronized effects: {effects}; music: {sound['music']}; "
         f"exclude: {exclusions}; generate the complete production sound with the picture and keep "
         "the native rendered track"
+    )
+
+
+def native_sfx_prompt(plan: dict[str, Any]) -> str:
+    sound = plan["sound_design"]
+    effects = "; ".join(sound["synchronized_effects"]) or "none"
+    exclusions = "; ".join(sound["exclusions"]) or "none"
+    return (
+        f"Audio: no visible or spoken dialogue; ambience: {sound['ambience']}; "
+        f"synchronized effects: {effects}; music: {sound['music']}; exclude: {exclusions}; "
+        "generate the complete production sound with the picture and keep the native rendered track"
     )
 
 
@@ -768,6 +827,10 @@ def _seedance_native_params(
         merged.update(copied)
     if merged["mode"] not in {"controlled_single_shot", "native_multishot", "seedance_multishot_experimental"}:
         raise CinematographyError(f"invalid Seedance production mode: {merged['mode']}")
+    if merged.get("start_frame_behavior") not in START_FRAME_BEHAVIORS:
+        raise CinematographyError(
+            f"invalid Seedance start_frame_behavior: {merged.get('start_frame_behavior')}"
+        )
     shot_count = merged.get("shot_count")
     if not isinstance(shot_count, int) or isinstance(shot_count, bool) or shot_count < 1:
         raise CinematographyError("seedance_plan.shot_count must be a positive integer")
@@ -878,6 +941,104 @@ def _seedance_native_params(
     return params, merged, errors
 
 
+def _cinema35_native_params(
+    grammar: dict[str, Any],
+    inferred_params: dict[str, Any],
+    plan: dict[str, Any] | None,
+    references: dict[str, Any] | None,
+) -> tuple[dict[str, Any], dict[str, Any], list[str]]:
+    merged = default_cinema35_plan()
+    if plan is not None:
+        if not isinstance(plan, dict):
+            raise CinematographyError("cinema35_plan must be an object")
+        unknown = sorted(set(plan) - set(merged))
+        if unknown:
+            raise CinematographyError("unknown cinema35_plan fields: " + ", ".join(unknown))
+        copied = deepcopy(plan)
+        if "sound_design" in copied:
+            sound = copied.pop("sound_design")
+            if not isinstance(sound, dict):
+                raise CinematographyError("cinema35_plan.sound_design must be an object")
+            merged["sound_design"].update(sound)
+        merged.update(copied)
+    if merged["visual_priority"] not in {"stability", "balanced", "expressive"}:
+        raise CinematographyError("cinema35_plan.visual_priority is invalid")
+    if merged["start_frame_behavior"] not in START_FRAME_BEHAVIORS:
+        raise CinematographyError("cinema35_plan.start_frame_behavior is invalid")
+    if merged["audio_mode"] not in {"none", "native_sfx"}:
+        raise CinematographyError(
+            "Cinema 3.5 audio_mode supports none or native_sfx; dialogue-reference conditioning remains an explicit A/B experiment"
+        )
+    sound_errors = validate_sound_design(
+        merged["sound_design"], require_complete=merged["audio_mode"] == "native_sfx"
+    )
+    if merged["audio_mode"] == "native_sfx" and not is_no_dialogue_brief(
+        merged["sound_design"].get("dialogue")
+    ):
+        sound_errors.append(
+            "Cinema 3.5 native_sfx requires sound_design.dialogue to explicitly say none or no dialogue"
+        )
+    if sound_errors:
+        raise CinematographyError("invalid Cinema 3.5 sound design:\n- " + "\n- ".join(sound_errors))
+    if not isinstance(merged["multi_prompt"], list) or any(
+        not isinstance(item, str) or not item.strip() for item in merged["multi_prompt"]
+    ):
+        raise CinematographyError("cinema35_plan.multi_prompt must be an array of non-empty strings")
+    if merged["multi_shots"] and len(merged["multi_prompt"]) < 2:
+        raise CinematographyError("Cinema 3.5 multi_shots requires at least two multi_prompt entries")
+    if not merged["multi_shots"] and merged["multi_prompt"]:
+        raise CinematographyError("Cinema 3.5 multi_prompt requires multi_shots=true")
+    if merged["style_prompt"] and any(
+        merged.get(field) for field in ("camera_style", "light_scheme", "color_grading")
+    ):
+        raise CinematographyError(
+            "Cinema 3.5 style_prompt is mutually exclusive with camera_style, light_scheme, and color_grading"
+        )
+    transport = _reference_transport(references)
+    total_references = (
+        int(bool(transport["start_image"]))
+        + int(bool(transport["end_image"]))
+        + len(transport["image_references"])
+        + len(transport["video_references"])
+        + len(transport["audio_references"])
+    )
+    errors: list[str] = []
+    if total_references > 15:
+        errors.append("Cinema 3.5 total media references exceed 15")
+    if transport["audio_references"]:
+        errors.append(
+            "Cinema 3.5 audio-reference conditioning is not yet a proven production route; run an explicit A/B outside the paid gate"
+        )
+    duration_value = float(grammar["duration_seconds"])
+    if not duration_value.is_integer():
+        errors.append("Cinema 3.5 duration must be a whole number of seconds")
+    params = {} if merged["style_prompt"] else dict(inferred_params)
+    for field in ("camera_style", "light_scheme", "color_grading"):
+        if merged[field] is not None:
+            params[field] = merged[field]
+    params.update(
+        {
+            "duration": int(duration_value),
+            "genre": merged["genre"],
+            "aspect_ratio": merged["aspect_ratio"],
+            "resolution": merged["resolution"],
+            "prompt_language": merged["prompt_language"],
+            "enhance_prompt": merged["enhance_prompt"],
+            "generate_audio": merged["audio_mode"] == "native_sfx",
+            "multi_shots": merged["multi_shots"],
+            "multi_shot_mode": merged["multi_shot_mode"],
+        }
+    )
+    if merged["multi_prompt"]:
+        params["multi_prompt"] = merged["multi_prompt"]
+    if merged["style_prompt"]:
+        params["style_prompt"] = merged["style_prompt"]
+    for key, value in transport.items():
+        if value not in (None, [], ""):
+            params[key] = value
+    return params, merged, errors
+
+
 def compile_prompt(
     grammar: dict[str, Any],
     *,
@@ -889,6 +1050,7 @@ def compile_prompt(
     invariants: list[str] | None = None,
     live_schema: dict[str, Any] | None = None,
     seedance_plan: dict[str, Any] | None = None,
+    cinema35_plan: dict[str, Any] | None = None,
     references: dict[str, Any] | None = None,
     boundary_strategy: str | None = None,
     schema_max_age_hours: float = 24.0,
@@ -919,14 +1081,21 @@ def compile_prompt(
         look_terms.append(index[temporal]["prompt"])
     constraints = sorted({text for item in selected for text in item.get("constraints", [])})
     plan: dict[str, Any] | None = None
+    cinema_plan: dict[str, Any] | None = None
     native_params = _native_params(grammar, provider, profile)
-    seedance_errors: list[str] = []
+    provider_errors: list[str] = []
     if provider in {"seedance_2_0", "seedance_2_0_mini"}:
-        native_params, plan, seedance_errors = _seedance_native_params(
+        native_params, plan, provider_errors = _seedance_native_params(
             provider, grammar, seedance_plan, references, boundary_strategy
         )
-    if seedance_errors:
-        raise CinematographyError("Seedance plan rejected:\n- " + "\n- ".join(seedance_errors))
+    elif provider == "cinematic_studio_video_3_5":
+        native_params, cinema_plan, provider_errors = _cinema35_native_params(
+            grammar, native_params, cinema35_plan, references
+        )
+    if provider_errors:
+        label = "Seedance" if plan is not None else "Cinema 3.5"
+        raise CinematographyError(f"{label} plan rejected:\n- " + "\n- ".join(provider_errors))
+    active_plan = plan or cinema_plan
     duration = grammar.get("duration_seconds")
     if plan and plan["mode"] in {"native_multishot", "seedance_multishot_experimental"}:
         header = f"{plan['shot_count']} shots / {duration}s / {plan['aspect_ratio']} / timecoded sequence"
@@ -942,19 +1111,34 @@ def compile_prompt(
         forbidden = re.compile(r"\b(cut to|hard cut|jump cut|montage|multi[- ]?shot)\b", re.IGNORECASE)
         if forbidden.search(" ".join((subject, setting, action, exit_state))):
             raise CinematographyError("single continuous Seedance shot conflicts with cuts or montage language")
+    elif cinema_plan:
+        if cinema_plan["multi_shots"]:
+            header = (
+                f"{len(cinema_plan['multi_prompt'])} shots / {duration}s / "
+                f"{cinema_plan['aspect_ratio']} / directed sequence"
+            )
+        else:
+            header = f"1 shot / {duration}s / {cinema_plan['aspect_ratio']} / directed continuous shot"
+        beat_text = []
     else:
         header = ""
         beat_text = []
     if plan:
-        compact_camera = list(dict.fromkeys(camera_terms))[:4]
-        compact_look = list(dict.fromkeys(look_terms))[:2]
+        compact_camera = list(dict.fromkeys(
+            item for item in (
+                technique_prompt(index, grammar.get("shot_size")),
+                technique_prompt(index, grammar.get("movement")),
+            ) if item
+        ))
+        compact_look = list(dict.fromkeys(look_terms))[:1]
+        has_start = bool((references or {}).get("start"))
         prompt_parts = [
             header,
             f"Action: {action.strip()}",
-            f"Subject: {subject.strip()}",
-            "Start from the supplied image; preserve its composition as motion begins",
+            None if has_start else f"Subject: {subject.strip()}",
+            start_frame_prompt(plan["start_frame_behavior"]) if has_start else None,
             f"Camera: {', '.join(compact_camera)}",
-            f"Setting and light: {setting.strip()}; {', '.join(compact_look)}; {grammar.get('dramatic_beat') or ''}",
+            f"Scene: {setting.strip()}; {', '.join(compact_look)}",
             *beat_text,
             f"End state: {exit_state.strip()}",
         ]
@@ -968,6 +1152,27 @@ def compile_prompt(
             prompt_parts.append(
                 "Arrive naturally at the supplied end-image composition without inserting an editorial cut"
             )
+    elif cinema_plan:
+        has_start = bool((references or {}).get("start"))
+        movement_term = technique_prompt(index, grammar.get("movement"))
+        shot_term = technique_prompt(index, grammar.get("shot_size"))
+        angle_term = technique_prompt(index, grammar.get("angle"))
+        compact_camera = list(dict.fromkeys(
+            item for item in (movement_term, shot_term, angle_term) if item
+        ))[:3]
+        native_look_fields = {
+            key for key in ("light_scheme", "color_grading") if key in native_params
+        }
+        compact_look = [] if native_look_fields else list(dict.fromkeys(look_terms))[:1]
+        prompt_parts = [
+            header,
+            f"Action: {action.strip()}",
+            None if has_start else f"Subject: {subject.strip()}",
+            start_frame_prompt(cinema_plan["start_frame_behavior"]) if has_start else None,
+            f"Camera move: {', '.join(compact_camera)}",
+            f"Scene: {setting.strip()}" + (f"; {compact_look[0]}" if compact_look else ""),
+            f"End state: {exit_state.strip()}",
+        ]
     else:
         prompt_parts = [
             f"{subject} in {setting}".strip(),
@@ -977,24 +1182,30 @@ def compile_prompt(
             f"End state: {exit_state.strip()}",
         ]
     all_invariants = list(invariants or [])
-    if plan:
-        all_invariants.extend(plan.get("camera_invariants") or [])
+    if active_plan:
+        all_invariants.extend(active_plan.get("camera_invariants") or [])
     all_invariants.extend(constraints)
     if all_invariants:
         unique_invariants = list(dict.fromkeys(item.strip() for item in all_invariants if item.strip()))
-        if plan:
+        if active_plan:
             unique_invariants = unique_invariants[:3]
         prompt_parts.append("Critical invariants: " + "; ".join(unique_invariants))
     if plan:
         prompt_parts.append(seedance_audio_prompt(plan))
+    elif cinema_plan and cinema_plan["audio_mode"] == "native_sfx":
+        prompt_parts.append(native_sfx_prompt(cinema_plan))
     prompt = ". ".join(part for part in prompt_parts if part and part != " in")
     prompt_lint = None
     prompt_refinement = None
-    if plan:
-        load_bearing = plan.get("load_bearing_element") or action.strip()
+    if active_plan:
+        load_bearing = active_plan.get("load_bearing_element") or action.strip()
         prompt_refinement = director_intelligence.refine_prompt(
             prompt,
-            kind=plan.get("prompt_kind") or ("multishot" if plan["mode"] != "controlled_single_shot" else "simple"),
+            kind=active_plan.get("prompt_kind") or (
+                "multishot" if (plan and plan["mode"] != "controlled_single_shot")
+                or (cinema_plan and cinema_plan["multi_shots"])
+                else "simple"
+            ),
             load_bearing_element=load_bearing,
         )
         prompt = prompt_refinement["prompt"]
@@ -1031,6 +1242,7 @@ def compile_prompt(
         "schema_verified_at": schema_verified_at,
         "schema_contract_hash": schema_contract_hash,
         "seedance_plan": plan,
+        "cinema35_plan": cinema_plan,
         "prompt_lint": prompt_lint,
         "prompt_refinement": prompt_refinement,
     }

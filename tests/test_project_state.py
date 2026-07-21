@@ -211,6 +211,11 @@ class ProductionStateTests(unittest.TestCase):
         for name in state.DATA_FILES:
             self.assertTrue((self.production / "data" / name).is_file())
         self.assertTrue((self.production / "dashboard" / "project-data.js").is_file())
+        state.add_scene(self.production, "SCENE_C35", "Cinema route", 1)
+        state.add_shot(self.production, "SHOT_C35", "SCENE_C35", "Expressive move", 1)
+        shot = state.read_json(state.data_dir(self.production) / "shots.json")["items"][0]
+        self.assertEqual(shot["cinema35_plan"]["start_frame_behavior"], "match_then_release")
+        self.assertEqual(shot["cinema35_plan"]["audio_mode"], "none")
 
     def test_requirements_require_user_and_all_confirmed(self) -> None:
         with self.assertRaisesRegex(state.StateError, "only the user"):
@@ -1135,6 +1140,22 @@ class ProductionStateTests(unittest.TestCase):
             state.SCHEMA_VERSION,
         )
         self.assertFalse(state.validate(self.production))
+
+    def test_explicit_v9_migration_adds_cinema35_plan(self) -> None:
+        state.add_scene(self.production, "SCENE_OLD", "Old", 1)
+        state.add_shot(self.production, "SHOT_OLD", "SCENE_OLD", "Old shot", 1)
+        for name in state.DATA_FILES:
+            path = state.data_dir(self.production) / name
+            document = state.read_json(path)
+            document["schema_version"] = 9
+            if name == "shots.json":
+                document["items"][0].pop("cinema35_plan", None)
+            state.atomic_write_json(path, document, backup=False)
+        result = state.migrate(self.production)
+        self.assertEqual(result["schema_version"], state.SCHEMA_VERSION)
+        shot = state.read_json(state.data_dir(self.production) / "shots.json")["items"][0]
+        self.assertEqual(shot["cinema35_plan"]["camera_style"], None)
+        self.assertEqual(shot["cinema35_plan"]["start_frame_behavior"], "match_then_release")
 
     def test_explicit_v5_migration_converts_visible_dialogue_to_native_audio(self) -> None:
         state.add_scene(self.production, "SCENE_001", "Opening", 1)

@@ -306,6 +306,7 @@ def execute(args: argparse.Namespace) -> Any:
             subject=args.subject, setting=args.setting, action=args.action,
             exit_state=args.exit_state, invariants=args.invariant, live_schema=live_schema,
             seedance_plan=shot.get("seedance_plan"), references=shot.get("references"),
+            cinema35_plan=shot.get("cinema35_plan"),
             boundary_strategy=(shot.get("boundary") or {}).get("strategy"),
         )
         grammar = cinematography.apply_compilation(shot.get("shot_grammar", {}), compiled)
