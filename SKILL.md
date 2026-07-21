@@ -1,6 +1,6 @@
 ---
 name: sonol-higgsfield
-description: Orchestrate approval-gated Higgsfield video productions from requirements interview through storyboard, director-selected shot boundaries, Seedance generation, ElevenLabs V3 dialogue masters, continuity and Korean-text QC, FFmpeg finishing, recent-actual credit guidance, and a persistent local dashboard. Use when a user asks to plan, generate, manage, review, resume, or finish a multi-shot Higgsfield film, ad, story, campaign, or narrated video with reusable characters, references, audio, approvals, and selective regeneration.
+description: Orchestrate approval-gated Higgsfield video productions from requirements interview through storyboard, director-selected shot boundaries, Seedance generation with ElevenLabs V3-conditioned native dialogue audio, continuity and Korean-text QC, FFmpeg finishing, recent-actual credit guidance, and a persistent local dashboard. Use when a user asks to plan, generate, manage, review, resume, or finish a multi-shot Higgsfield film, ad, story, campaign, or narrated video with reusable characters, references, audio, approvals, and selective regeneration.
 ---
 
 # Sonol Higgsfield
@@ -142,8 +142,10 @@ enum from this skill into a paid command.
 
 For `seedance_2_0` or `seedance_2_0_mini`, read
 [seedance-2-0-production.md](references/seedance-2-0-production.md). Default to
-one controlled shot, 720p prototypes no longer than eight seconds, and explicit
-native-audio off. Use experimental timecoded multi-shot only after the user
+one controlled shot and 720p prototypes no longer than eight seconds. Compile
+native audio off explicitly for post-only and silent routes; compile it on
+explicitly for the approved visible-dialogue audio-reference route. Use
+experimental timecoded multi-shot only after the user
 accepts whole-clip regeneration risk.
 
 Do not call the Higgsfield live cost endpoint or build economy, recommended, and
@@ -198,7 +200,7 @@ Apply the single-start-image video contract, enforced by the generation gate:
 - No `image_references` in a video call. Identity and location control comes
   from the start image itself, which was composed from those references.
 - `end_image` only for a declared `motivated_transition`.
-- `audio_references` only for the locked dialogue master on a visible-dialogue
+- `audio_references` only for the locked dialogue reference on a visible-dialogue
   route (the start image satisfies the visual-reference requirement).
 - If identity drifts late in a clip, shorten or reset the shot and recompose its
   single start image; do not bypass the compiler with an extra face reference.
@@ -245,15 +247,20 @@ Inspect every completed shot before generating the next dependent shot. Read
 - `OFFSCREEN_NARRATION`: generate picture with `audio_mode=post_only`; create
   narration separately, store its approved master path and SHA-256 fingerprint,
   and add it only in the final mix.
-- `VISIBLE_DIALOGUE_ELEVENLABS_V3`: lock the final ElevenLabs `eleven_v3`
-  dialogue master first, pass that unchanged file through Seedance
-  `audio_references` with `audio_mode=audio_reference`, inspect lip sync, discard
-  the Seedance-rendered audio track, and remux the untouched master in finishing.
+- `VISIBLE_DIALOGUE_V3_REFERENCE_NATIVE_AUDIO`: approve a clean ElevenLabs
+  `eleven_v3` dialogue reference first and pass it through Seedance
+  `audio_references` with `audio_mode=audio_reference`. Before compilation,
+  specify dialogue performance, ambience, zero to three synchronized effects,
+  music or `none`, and excluded sounds in `seedance_plan.sound_design`. Generate
+  picture and complete production sound together, then preserve the
+  Seedance-rendered native track after transcript, pronunciation, lip-sync,
+  sound-sync, and technical QC.
 
-Keep voice IDs, pronunciation sheet, speaker assignment, and master path in the
+Keep voice IDs, pronunciation sheet, speaker assignment, and reference path in the
 shot record. Multiple visible speakers require distinct locked voices or an
-authorized ElevenLabs dialogue workflow. Never call the Seedance output track
-the dialogue master.
+authorized ElevenLabs dialogue workflow. Treat the V3 file as a conditioning
+reference, not a transparent final waveform; never claim Seedance preserves it
+sample-for-sample.
 
 Use `speech2text` for transcript evidence when available. Use FFmpeg for
 extraction, trimming, time stretch, muxing, and assembly. Do not describe
@@ -270,7 +277,7 @@ Run the sequential adaptive loop after every accepted shot:
 2. Analyze that frame against the story plan: pose, gaze, props, framing,
    lighting, emotional state.
 3. Micro-adjust the next shot's action and prompt to match the frame, keeping
-   the anchor beats and recorded audio masters fixed.
+   the anchor beats, locked dialogue references, and narration masters fixed.
 4. Classify the incoming edit and wire exactly one start image.
 
 Boundary strategies:
@@ -325,7 +332,7 @@ python3 "$SONOL_HIGGSFIELD_SKILL/scripts/sonol_higgsfield.py" set-adaptive-story
   NOT_APPLICABLE --previous-shot-id <shot_id>
 ```
 
-Schema v5 blocks the next shot until the immediate previous shot is generated,
+Schema v6 blocks the next shot until the immediate previous shot is generated,
 user-accepted, first-frame-QC passed, boundary-analyzed, and bound to the next
 adaptive plan. A cut/reset start image must carry just-in-time provenance after
 that previous shot. Chained shots must use the exact recorded boundary frame.
@@ -337,6 +344,11 @@ color, ambience, dialogue timing, and narrative emotion.
 
 Repair in this order: edit point, J/L cut, common ambience, grade, minor speed
 adjustment, cutaway, bridge shot, transition clip, then next-shot regeneration.
+For visible dialogue with native production audio, do not add replacement
+dialogue, ambience, Foley, effects, or music by default. If its required sound
+fails QC, simplify the sound brief and regenerate the affected shot; external
+replacement is an explicitly approved exception requiring a synchronization and
+lost-effects recovery plan.
 Generate a four-second-or-longer transition when the live model minimum
 requires it and trim locally to the intended one-to-three-second edit.
 
@@ -344,10 +356,12 @@ requires it and trim locally to the intended one-to-three-second edit.
 
 Require transcript, technical, lip-sync/manual, continuity, and user-review
 gates before marking a shot final. Assemble only accepted versions. For visible
-dialogue, strip the Seedance-rendered track, then apply the locked ElevenLabs
-master before ambience, effects, music, ducking, captions, and final grade. Use
-`media_pipeline.py strip-audio` and `final-mix` for local handling. Update actual
-credits, job IDs, retry counts, and the dashboard.
+dialogue, keep the Seedance-rendered track as the complete production sound and
+use `media_pipeline.py preserve-audio` when a copy-only finishing pass is needed.
+Do not add creative audio stems after generation by default; limit finishing to
+technical checks, stream-preserving assembly, captions, and grade. Keep
+`strip-audio` and `final-mix` for post-only routes or an explicitly approved
+repair exception. Update actual credits, job IDs, retry counts, and the dashboard.
 
 Deliver the final file or URL with duration, aspect, model ledger, approved
 ceiling, reference-only arithmetic when available, actual credits, regenerated
@@ -371,6 +385,10 @@ shots, QC gaps, and any manual checks still required.
 - Never combine multiple primary camera moves unless the user accepts an experimental A/B test.
 - Never insert web `@character`, `@style`, `@motion`, or `@audio` aliases into a CLI prompt unless the live CLI schema explicitly exposes alias binding.
 - Never let Seedance inherit its current `generate_audio=true` default; compile an explicit shot audio route.
+- Never queue visible dialogue without a complete compact sound brief covering
+  voice, ambience, synchronized effects, music state, and exclusions.
+- Never discard or creatively overdub an accepted visible-dialogue native track
+  unless the user approves an exceptional recovery plan.
 - Never present recent-actual arithmetic as a live quote, fixed price, or hard spending guarantee.
 - Never claim a lens number, camera preset, or prompt-soft instruction guarantees the rendered result.
 - Never infer user approval from silence, model output, or an earlier version.

@@ -14,9 +14,12 @@ Official sources:
 
 Use `controlled_single_shot` unless the user explicitly accepts an experimental
 multi-shot generation. Start image-to-video with a sharp, front-facing,
-well-lit image when possible. Prototype at 720p, eight seconds or less, and
-`generate_audio=false` through `audio_mode=post_only`. Review the entire clip, especially seconds five through
-eight. Change one variable per iteration.
+well-lit image when possible. Prototype at 720p, eight seconds or less, and use
+an explicit audio mode. Compile `generate_audio=false` for post-only or silent
+routes. For approved visible dialogue, use `audio_mode=audio_reference`,
+`generate_audio=true`, a locked ElevenLabs V3 reference, and a complete compact
+sound brief. Review the entire clip, especially seconds five through eight.
+Change one variable per iteration.
 
 Do not describe a 720p-to-1080p regeneration as an upscale that preserves
 motion. The live Seedance CLI contract exposes no seed parameter, so a new
@@ -34,7 +37,9 @@ The compiler emits:
 4. one primary camera movement plus framing/focus;
 5. setting, lighting, and mood in one compact clause;
 6. numbered timecoded beats only for approved experimental multi-shot;
-7. end state, at most three critical invariants, and audio route.
+7. end state and at most three critical invariants;
+8. one compact audio clause containing the voice requirement, complete
+   ambience, zero to three synchronized effects, music state, and exclusions.
 
 Use precise camera verbs such as `dolly in`, `truck left`, `arc shot`,
 `push in`, `pull back wide`, `handheld follow`, `crane up`, or `orbital move`.
@@ -60,7 +65,7 @@ blends all of them and can reframe the opening away from the start image
 entirely (verified in production, 2026-07: a tight two-shot start image plus
 two wide composition references opened wide). Therefore a paid Seedance call
 carries exactly one `start_image`; `end_image` only for a declared motivated
-transition; `audio_references` only for a locked dialogue master. Character,
+transition; `audio_references` only for a locked dialogue reference. Character,
 location, prop, and style references are consumed by the image model that
 composes the start frame, never by the video call. If identity drifts, shorten
 or reset the shot and recompose the start image rather than adding a face
@@ -111,15 +116,24 @@ Choose exactly one `audio_mode`:
 - `post_only`: default; generate picture without audio and construct all
   non-dialogue, narration, ambience, effects, and music during finishing;
 - `none`: only for an intentionally silent final shot;
-- `audio_reference`: only for visible dialogue after the final ElevenLabs
-  `eleven_v3` master is locked; at least one audio and one visual reference are
-  required. Discard the Seedance-rendered track and remux the untouched master;
+- `audio_reference`: only for visible dialogue after a clean ElevenLabs
+  `eleven_v3` conditioning reference is locked; at least one audio and one
+  visual reference are required. Complete `sound_design.dialogue`, `ambience`,
+  `synchronized_effects`, `music`, and `exclusions` before compilation. Generate
+  the full production sound with the picture and preserve the rendered track
+  when it passes QC;
 - `native_sfx` and `native_dialogue`: compiler-compatible but outside the Sonol
   production policy.
 
 The live contract currently defaults `generate_audio` to true. Every execution
 command must therefore include the compiler's explicit boolean. Do
 not let a prototype inherit the provider default.
+
+An audio reference is generative guidance, not transparent audio transport. Do
+not promise sample-identical ElevenLabs output or perfect compliance. The native
+track remains a candidate until transcript, pronunciation, lip-sync,
+sound-event timing, unwanted-sound, and technical QC pass. If a required sound
+fails, simplify the brief and regenerate before proposing an external repair.
 
 ## Iteration and QC
 

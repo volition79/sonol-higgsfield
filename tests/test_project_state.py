@@ -124,7 +124,12 @@ class ProductionStateTests(unittest.TestCase):
                 },
                 "references": {"start": "media/images/SHOT_001_start.png"},
                 "required_asset_ids": ["CHAR_001"],
-                "audio": {"route": "NO_DIALOGUE_POST", "has_visible_dialogue": False},
+                "audio": {
+                    "route": "NO_DIALOGUE_POST",
+                    "has_visible_dialogue": False,
+                    "generated_track_policy": "NOT_GENERATED",
+                    "final_mix_required": True,
+                },
                 "model": "seedance_2_0",
                 "seedance_plan": {"aspect_ratio": "16:9", "resolution": "720p", "audio_mode": "post_only"},
                 "execution": {"mode": "model", "argv": argv},
@@ -375,7 +380,7 @@ class ProductionStateTests(unittest.TestCase):
         shot["boundary"]["start_image_provenance"]["created_after_shot_id"] = "SHOT_000"
         self.assertTrue(any("just in time" in item for item in state.sequential_adaptation_errors(state.load_all(self.production), shot)))
 
-    def test_visible_dialogue_requires_locked_eleven_v3_master(self) -> None:
+    def test_visible_dialogue_requires_v3_reference_and_preserved_native_audio(self) -> None:
         self.add_locked_asset()
         self.add_locked_shot()
         state.update_shot(
@@ -383,24 +388,36 @@ class ProductionStateTests(unittest.TestCase):
             "SHOT_001",
             {
                 "audio": {
-                    "route": "VISIBLE_DIALOGUE_ELEVENLABS_V3",
+                    "route": "VISIBLE_DIALOGUE_V3_REFERENCE_NATIVE_AUDIO",
                     "has_visible_dialogue": True,
                     "voice_provider": "elevenlabs",
                     "voice_model": "eleven_v3",
-                    "dialogue_master_path": "media/audio/dialogue.wav",
-                    "dialogue_master_sha256": "sha256:" + "a" * 64,
-                    "discard_generated_track": True,
-                    "final_mix_required": True,
+                    "dialogue_reference_path": "media/audio/dialogue.wav",
+                    "dialogue_reference_sha256": "sha256:" + "a" * 64,
+                    "generated_track_policy": "PRESERVE",
+                    "final_mix_required": False,
                 },
                 "references": {"audios": ["media/audio/dialogue.wav"], "start": "hero.png"},
-                "seedance_plan": {"audio_mode": "audio_reference"},
+                "seedance_plan": {
+                    "audio_mode": "audio_reference",
+                    "sound_design": {
+                        "dialogue": "one Korean speaker follows the supplied reference exactly",
+                        "ambience": "light rooftop wind and distant city traffic",
+                        "synchronized_effects": ["soft glass contact at the visible touch"],
+                        "music": "none",
+                        "exclusions": ["no narration", "no extra voices"],
+                    },
+                },
             },
             "agent",
         )
         shot = state.read_json(state.data_dir(self.production) / "shots.json")["items"][0]
         self.assertEqual(state.audio_plan_errors(shot), [])
-        shot["audio"]["dialogue_master_sha256"] = None
+        shot["audio"]["dialogue_reference_sha256"] = None
         self.assertTrue(any("SHA-256" in item for item in state.audio_plan_errors(shot)))
+        shot["audio"]["dialogue_reference_sha256"] = "sha256:" + "a" * 64
+        shot["audio"]["generated_track_policy"] = "DISCARD"
+        self.assertTrue(any("preserve" in item for item in state.audio_plan_errors(shot)))
 
     def test_offscreen_narration_requires_a_fingerprinted_master(self) -> None:
         self.add_locked_asset()
@@ -414,6 +431,7 @@ class ProductionStateTests(unittest.TestCase):
                     "has_visible_dialogue": False,
                     "narration_master_path": "media/audio/narration.wav",
                     "narration_master_sha256": "sha256:" + "b" * 64,
+                    "generated_track_policy": "NOT_GENERATED",
                     "final_mix_required": True,
                 },
                 "seedance_plan": {"audio_mode": "post_only"},
@@ -543,8 +561,58 @@ class ProductionStateTests(unittest.TestCase):
         self.assertIn("boundary_analysis", shot)
         self.assertIn("start_frame_qc", shot)
         self.assertIn("story", shot)
-        self.assertEqual(state.read_json(state.data_dir(self.production) / "project.json")["schema_version"], 5)
+        self.assertEqual(state.read_json(state.data_dir(self.production) / "project.json")["schema_version"], 6)
         self.assertFalse(state.validate(self.production))
+
+    def test_explicit_v5_migration_converts_visible_dialogue_to_native_audio(self) -> None:
+        state.add_scene(self.production, "SCENE_001", "Opening", 1)
+        state.add_shot(self.production, "SHOT_001", "SCENE_001", "Dialogue", 1)
+        for name in state.DATA_FILES:
+            path = state.data_dir(self.production) / name
+            document = state.read_json(path)
+            document["schema_version"] = 5
+            if name == "shots.json":
+                shot = document["items"][0]
+                shot["seedance_plan"].pop("sound_design", None)
+                shot["audio"].update(
+                    {
+                        "route": "VISIBLE_DIALOGUE_ELEVENLABS_V3",
+                        "dialogue_master_path": "media/audio/dialogue.wav",
+                        "dialogue_master_sha256": "sha256:" + "a" * 64,
+                        "discard_generated_track": True,
+                        "final_mix_required": True,
+                    }
+                )
+                shot["story"]["dialogue_master_sha256"] = "sha256:" + "a" * 64
+            state.atomic_write_json(path, document, backup=False)
+        result = state.migrate(self.production)
+        self.assertEqual(result["schema_version"], 6)
+        shot = state.read_json(state.data_dir(self.production) / "shots.json")["items"][0]
+        self.assertEqual(shot["audio"]["route"], "VISIBLE_DIALOGUE_V3_REFERENCE_NATIVE_AUDIO")
+        self.assertEqual(shot["audio"]["generated_track_policy"], "PRESERVE")
+        self.assertFalse(shot["audio"]["final_mix_required"])
+        self.assertEqual(shot["audio"]["dialogue_reference_path"], "media/audio/dialogue.wav")
+        self.assertNotIn("discard_generated_track", shot["audio"])
+        self.assertIn("sound_design", shot["seedance_plan"])
+
+    def test_explicit_v5_migration_preserves_intentional_silence_mode(self) -> None:
+        state.add_scene(self.production, "SCENE_001", "Ending", 1)
+        state.add_shot(self.production, "SHOT_001", "SCENE_001", "Silence", 1)
+        for name in state.DATA_FILES:
+            path = state.data_dir(self.production) / name
+            document = state.read_json(path)
+            document["schema_version"] = 5
+            if name == "shots.json":
+                shot = document["items"][0]
+                shot["seedance_plan"]["audio_mode"] = "none"
+                shot["seedance_plan"].pop("sound_design", None)
+                shot["audio"].update({"route": "INTENTIONAL_SILENCE", "final_mix_required": False})
+            state.atomic_write_json(path, document, backup=False)
+        state.migrate(self.production)
+        shot = state.read_json(state.data_dir(self.production) / "shots.json")["items"][0]
+        self.assertEqual(shot["seedance_plan"]["audio_mode"], "none")
+        self.assertEqual(shot["audio"]["generated_track_policy"], "NOT_GENERATED")
+        self.assertFalse(shot["audio"]["final_mix_required"])
 
     def test_history_and_backup_are_durable(self) -> None:
         state.set_requirement(self.production, "purpose", "film", "CONFIRMED", "user", "test")

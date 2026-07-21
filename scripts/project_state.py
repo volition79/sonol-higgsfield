@@ -17,7 +17,7 @@ import cinematography
 import execution_contract
 
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 REQUIRED_REQUIREMENTS = (
     "purpose",
     "core_message",
@@ -101,7 +101,7 @@ AUDIO_ROUTES = {
     "NO_DIALOGUE_POST",
     "INTENTIONAL_SILENCE",
     "OFFSCREEN_NARRATION",
-    "VISIBLE_DIALOGUE_ELEVENLABS_V3",
+    "VISIBLE_DIALOGUE_V3_REFERENCE_NATIVE_AUDIO",
 }
 BOUNDARY_OBSERVATION_FIELDS = ("pose", "gaze", "hands", "props", "framing", "lighting", "emotion")
 DIALOGUE_IMPACTS = {"NOT_APPLICABLE", "UNCHANGED", "RERECORDED"}
@@ -220,12 +220,12 @@ def default_audio_plan() -> dict[str, Any]:
         "voice_provider": None,
         "voice_model": None,
         "voice_ids": [],
-        "dialogue_master_path": None,
-        "dialogue_master_sha256": None,
+        "dialogue_reference_path": None,
+        "dialogue_reference_sha256": None,
         "narration_master_path": None,
         "narration_master_sha256": None,
-        "discard_generated_track": False,
-        "final_mix_required": True,
+        "generated_track_policy": "UNDECIDED",
+        "final_mix_required": None,
         "final_mix_path": None,
     }
 
@@ -249,7 +249,7 @@ def default_shot_story() -> dict[str, Any]:
         "based_on_boundary_analysis_id": None,
         "adjustment_reason": None,
         "dialogue_impact": "NOT_APPLICABLE",
-        "dialogue_master_sha256": None,
+        "dialogue_reference_sha256": None,
         "recorded_audio_sha256": None,
     }
 
@@ -375,7 +375,7 @@ def migrate(root: str | Path) -> dict[str, Any]:
     if versions == {SCHEMA_VERSION}:
         return {"migrated": False, "schema_version": SCHEMA_VERSION}
     only_version = next(iter(versions)) if len(versions) == 1 else None
-    if only_version not in {1, 2, 3, 4}:
+    if only_version not in {1, 2, 3, 4, 5}:
         raise StateError(f"cannot migrate mixed or unsupported schema versions: {sorted(versions, key=str)}")
     assert isinstance(only_version, int)
     from_version = only_version
@@ -389,7 +389,9 @@ def migrate(root: str | Path) -> dict[str, Any]:
             binding = shot["shot_grammar"].setdefault("provider_binding", {})
             binding.setdefault("schema_contract_hash", None)
         shot.setdefault("seedance_plan", cinematography.default_seedance_plan())
-        if shot["seedance_plan"].get("audio_mode") == "none":
+        for key, value in cinematography.default_seedance_plan().items():
+            shot["seedance_plan"].setdefault(key, deepcopy(value))
+        if from_version <= 4 and shot["seedance_plan"].get("audio_mode") == "none":
             shot["seedance_plan"]["audio_mode"] = "post_only"
         references = shot.setdefault("references", {})
         references.setdefault("manifest", [])
@@ -400,8 +402,28 @@ def migrate(root: str | Path) -> dict[str, Any]:
         shot.setdefault("boundary_analysis", default_boundary_analysis())
         shot.setdefault("start_frame_qc", default_start_frame_qc())
         audio = shot.setdefault("audio", {})
+        if audio.get("route") == "VISIBLE_DIALOGUE_ELEVENLABS_V3":
+            audio["route"] = "VISIBLE_DIALOGUE_V3_REFERENCE_NATIVE_AUDIO"
+        if not audio.get("dialogue_reference_path") and "dialogue_master_path" in audio:
+            audio["dialogue_reference_path"] = audio.get("dialogue_master_path")
+        if not audio.get("dialogue_reference_sha256") and "dialogue_master_sha256" in audio:
+            audio["dialogue_reference_sha256"] = audio.get("dialogue_master_sha256")
+        audio.pop("dialogue_master_path", None)
+        audio.pop("dialogue_master_sha256", None)
+        audio.pop("discard_generated_track", None)
         for key, value in default_audio_plan().items():
             audio.setdefault(key, deepcopy(value))
+        route = audio.get("route")
+        if route == "VISIBLE_DIALOGUE_V3_REFERENCE_NATIVE_AUDIO":
+            audio["generated_track_policy"] = "PRESERVE"
+            audio["final_mix_required"] = False
+        elif route in {"NO_DIALOGUE_POST", "OFFSCREEN_NARRATION", "INTENTIONAL_SILENCE"}:
+            audio["generated_track_policy"] = "NOT_GENERATED"
+            audio["final_mix_required"] = route in {"NO_DIALOGUE_POST", "OFFSCREEN_NARRATION"}
+        story = shot.setdefault("story", default_shot_story())
+        if not story.get("dialogue_reference_sha256") and "dialogue_master_sha256" in story:
+            story["dialogue_reference_sha256"] = story.get("dialogue_master_sha256")
+        story.pop("dialogue_master_sha256", None)
         generation = shot.setdefault("generation", {})
         generation.pop("cost_argv", None)
         generation.pop("cost_options", None)
@@ -1116,11 +1138,11 @@ def set_adaptive_story(
         analysis_id = analysis.get("analysis_id")
     audio = shot.get("audio") or {}
     master_hash = (
-        audio.get("dialogue_master_sha256")
-        if audio.get("route") == "VISIBLE_DIALOGUE_ELEVENLABS_V3"
+        audio.get("dialogue_reference_sha256")
+        if audio.get("route") == "VISIBLE_DIALOGUE_V3_REFERENCE_NATIVE_AUDIO"
         else audio.get("narration_master_sha256") if audio.get("route") == "OFFSCREEN_NARRATION" else None
     )
-    if audio.get("route") in {"VISIBLE_DIALOGUE_ELEVENLABS_V3", "OFFSCREEN_NARRATION"}:
+    if audio.get("route") in {"VISIBLE_DIALOGUE_V3_REFERENCE_NATIVE_AUDIO", "OFFSCREEN_NARRATION"}:
         if dialogue_impact not in {"UNCHANGED", "RERECORDED"}:
             raise StateError("recorded-speech adaptation must declare UNCHANGED or RERECORDED")
         if not isinstance(master_hash, str) or not SHA256_RE.fullmatch(master_hash):
@@ -1140,7 +1162,7 @@ def set_adaptive_story(
                 "based_on_boundary_analysis_id": analysis_id,
                 "adjustment_reason": adjustment_reason.strip(),
                 "dialogue_impact": dialogue_impact,
-                "dialogue_master_sha256": master_hash,
+                "dialogue_reference_sha256": master_hash,
                 "recorded_audio_sha256": master_hash,
             }
         },
@@ -1358,7 +1380,7 @@ def start_image_policy_errors(shot: dict[str, Any]) -> list[str]:
     """Enforce the single-start-image video contract.
 
     A paid video call carries exactly one start image, plus the locked dialogue
-    master when the audio route requires it, plus an end image only for a
+    conditioning reference when the audio route requires it, plus an end image only for a
     motivated transition. Identity, location, and prop references belong to the
     start-frame composition step, never to the video generation call.
     """
@@ -1393,6 +1415,9 @@ def audio_plan_errors(shot: dict[str, Any]) -> list[str]:
     errors: list[str] = []
     if route in {"NO_DIALOGUE_POST", "OFFSCREEN_NARRATION"} and audio_mode != "post_only":
         errors.append("non-visible speech routes must generate picture with audio_mode=post_only")
+    if route in {"NO_DIALOGUE_POST", "OFFSCREEN_NARRATION", "INTENTIONAL_SILENCE"}:
+        if audio.get("generated_track_policy") != "NOT_GENERATED":
+            errors.append("routes without native audio must use generated_track_policy=NOT_GENERATED")
     if route == "INTENTIONAL_SILENCE" and audio_mode != "none":
         errors.append("intentional silence must use audio_mode=none")
     if route == "OFFSCREEN_NARRATION" and audio.get("has_visible_dialogue") is not False:
@@ -1405,23 +1430,33 @@ def audio_plan_errors(shot: dict[str, Any]) -> list[str]:
             errors.append("off-screen narration master must be locked with a SHA-256 fingerprint")
         if audio.get("final_mix_required") is not True:
             errors.append("off-screen narration must require a final external mix")
-    if route == "VISIBLE_DIALOGUE_ELEVENLABS_V3":
+    if route == "NO_DIALOGUE_POST" and audio.get("final_mix_required") is not True:
+        errors.append("no-dialogue post route must require a final external mix")
+    if route == "INTENTIONAL_SILENCE" and audio.get("final_mix_required") is not False:
+        errors.append("intentional silence must not require a final external mix")
+    if route == "VISIBLE_DIALOGUE_V3_REFERENCE_NATIVE_AUDIO":
         if audio_mode != "audio_reference":
-            errors.append("visible dialogue must use the locked ElevenLabs master as audio_reference")
+            errors.append("visible dialogue must use the locked ElevenLabs reference as audio_reference")
         if audio.get("voice_provider") != "elevenlabs" or audio.get("voice_model") != "eleven_v3":
             errors.append("visible dialogue must lock voice_provider=elevenlabs and voice_model=eleven_v3")
-        master = audio.get("dialogue_master_path")
-        if not master:
-            errors.append("visible dialogue is missing the locked dialogue master")
-        elif master not in (shot.get("references") or {}).get("audios", []):
-            errors.append("dialogue master must be present in audio_references")
-        master_hash = audio.get("dialogue_master_sha256")
-        if not isinstance(master_hash, str) or not SHA256_RE.fullmatch(master_hash):
-            errors.append("visible dialogue master must be locked with a SHA-256 fingerprint")
-        if audio.get("discard_generated_track") is not True:
-            errors.append("visible dialogue must discard the Seedance-rendered audio track")
-        if audio.get("final_mix_required") is not True:
-            errors.append("visible dialogue must require a final external mix")
+        reference = audio.get("dialogue_reference_path")
+        if not reference:
+            errors.append("visible dialogue is missing the locked dialogue reference")
+        elif reference not in (shot.get("references") or {}).get("audios", []):
+            errors.append("dialogue reference must be present in audio_references")
+        reference_hash = audio.get("dialogue_reference_sha256")
+        if not isinstance(reference_hash, str) or not SHA256_RE.fullmatch(reference_hash):
+            errors.append("visible dialogue reference must be locked with a SHA-256 fingerprint")
+        if audio.get("generated_track_policy") != "PRESERVE":
+            errors.append("visible dialogue must preserve the Seedance-rendered native audio track")
+        if audio.get("final_mix_required") is not False:
+            errors.append("visible dialogue must not require a creative external audio mix")
+        errors.extend(
+            "visible dialogue " + message
+            for message in cinematography.validate_sound_design(
+                (shot.get("seedance_plan") or {}).get("sound_design"), require_complete=True
+            )
+        )
     return errors
 
 
@@ -1451,10 +1486,10 @@ def story_contract_errors(state: dict[str, dict[str, Any]], shot: dict[str, Any]
     if not story.get("adjustment_reason"):
         errors.append("shot adaptive plan has no adjustment reason")
     audio = shot.get("audio") or {}
-    if audio.get("route") in {"VISIBLE_DIALOGUE_ELEVENLABS_V3", "OFFSCREEN_NARRATION"}:
+    if audio.get("route") in {"VISIBLE_DIALOGUE_V3_REFERENCE_NATIVE_AUDIO", "OFFSCREEN_NARRATION"}:
         expected_hash = (
-            audio.get("dialogue_master_sha256")
-            if audio.get("route") == "VISIBLE_DIALOGUE_ELEVENLABS_V3"
+            audio.get("dialogue_reference_sha256")
+            if audio.get("route") == "VISIBLE_DIALOGUE_V3_REFERENCE_NATIVE_AUDIO"
             else audio.get("narration_master_sha256")
         )
         if story.get("recorded_audio_sha256") != expected_hash:

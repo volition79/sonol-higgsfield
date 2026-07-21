@@ -100,7 +100,7 @@ The video call and the start-frame composition step have different transports:
   only.
 - A previous boundary frame becomes a start frame only for `continuous_match`
   or `motivated_transition`.
-- Audio reference carries only the locked dialogue master on a
+- Audio reference carries only the locked dialogue conditioning reference on a
   visible-dialogue route.
 - Video reference (motion/camera behavior) requires an explicit recorded
   rationale; it is not part of the default contract.

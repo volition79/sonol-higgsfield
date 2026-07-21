@@ -15,6 +15,18 @@ from test_cinematography import seedance_snapshot  # noqa: E402
 
 
 class SeedanceContractTests(unittest.TestCase):
+    def sound_design(self) -> dict:
+        return {
+            "dialogue": "one Korean speaker follows the supplied reference naturally and exactly",
+            "ambience": "quiet rooftop wind and distant city traffic",
+            "synchronized_effects": ["a soft glass touch when the glass reaches the table"],
+            "music": "none",
+            "exclusions": ["no narration", "no additional voices"],
+        }
+
+    def audio_reference_plan(self) -> dict:
+        return {"audio_mode": "audio_reference", "sound_design": self.sound_design()}
+
     def grammar(self, duration: float = 5) -> dict:
         return cine.recommend(
             "주인공이 단서를 발견한다",
@@ -57,9 +69,11 @@ class SeedanceContractTests(unittest.TestCase):
         for mode in ("native_sfx", "native_dialogue", "audio_reference"):
             with self.subTest(mode=mode):
                 references = {"start": "start.png"}
+                plan = {"audio_mode": mode}
                 if mode == "audio_reference":
                     references = {"start": "start.png", "audios": ["voice.wav"]}
-                compiled = self.compile(seedance_plan={"audio_mode": mode}, references=references)
+                    plan = self.audio_reference_plan()
+                compiled = self.compile(seedance_plan=plan, references=references)
                 self.assertTrue(compiled["native_params"]["generate_audio"])
         self.assertFalse(self.compile(seedance_plan={"audio_mode": "post_only"})["native_params"]["generate_audio"])
 
@@ -72,7 +86,7 @@ class SeedanceContractTests(unittest.TestCase):
         ]
         for references, message in bad_cases:
             with self.subTest(message=message), self.assertRaisesRegex(cine.CinematographyError, message):
-                self.compile(seedance_plan={"audio_mode": "audio_reference"}, references=references)
+                self.compile(seedance_plan=self.audio_reference_plan(), references=references)
         with self.assertRaisesRegex(cine.CinematographyError, "motivated_transition"):
             self.compile(references={"start": "a", "end": "b"})
         motivated = self.compile(
@@ -82,6 +96,17 @@ class SeedanceContractTests(unittest.TestCase):
         self.assertEqual(motivated["native_params"]["end_image"], "b")
         with self.assertRaisesRegex(cine.CinematographyError, "at most 720p"):
             self.compile(seedance_plan={"generation_mode": "fast", "resolution": "1080p"})
+
+    def test_audio_reference_requires_complete_sound_design_and_compiles_it(self) -> None:
+        references = {"start": "start.png", "audios": ["voice.wav"]}
+        with self.assertRaisesRegex(cine.CinematographyError, "sound_design.dialogue"):
+            self.compile(seedance_plan={"audio_mode": "audio_reference"}, references=references)
+        compiled = self.compile(seedance_plan=self.audio_reference_plan(), references=references)
+        self.assertIn("supplied ElevenLabs V3 dialogue reference", compiled["prompt"])
+        self.assertIn("quiet rooftop wind", compiled["prompt"])
+        self.assertIn("soft glass touch", compiled["prompt"])
+        self.assertIn("music: none", compiled["prompt"])
+        self.assertIn("keep the native rendered track", compiled["prompt"])
 
     def test_duration_and_single_shot_semantics_are_enforced(self) -> None:
         with self.assertRaisesRegex(cine.CinematographyError, "between 4 and 15"):

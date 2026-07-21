@@ -27,7 +27,7 @@ visual-language image references only in the image-model composition step that
 creates that start image. The Seedance compiler rejects `image_references` in
 the paid video transport. Use video references only when motion or camera
 language materially matters and its rationale is recorded. Use audio references
-only for the locked visible-dialogue master.
+only for the locked visible-dialogue conditioning reference.
 
 ## Audio
 
@@ -36,13 +36,15 @@ only for the locked visible-dialogue master.
 - Intentionally silent final shot: use `none`.
 - Off-screen narration: use `post_only`, generate authorized TTS separately, and
   mix locally. For Korean, audition pronunciation before the full film.
-- Visible dialogue: generate and lock an ElevenLabs `eleven_v3` master first,
-  use it through Seedance `audio_references`, inspect lip sync manually, discard
-  the rendered track, and remux the unchanged master.
+- Visible dialogue: generate and lock a clean ElevenLabs `eleven_v3`
+  conditioning reference, specify the whole soundscape and key synchronized
+  effects in the Seedance prompt, inspect the jointly generated audio manually,
+  and preserve the rendered native track when it passes QC.
 - Transcript evidence: use `speech2text` or `clip_transcriber` when appropriate.
 
 Do not use `voice_change` as dialogue separation or general cleanup. Keep music,
-effects, and room tone out of the dialogue master.
+effects, and room tone out of the conditioning reference; describe them in the
+Seedance sound brief instead.
 
 ## Reference-only credit arithmetic
 

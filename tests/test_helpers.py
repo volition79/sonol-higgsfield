@@ -84,6 +84,15 @@ class HelperTests(unittest.TestCase):
         self.assertIn("[mix]", command)
         self.assertNotIn("0:a:0", " ".join(command))
 
+    def test_preserve_audio_keeps_generated_picture_and_sound_without_stems(self) -> None:
+        command = media_pipeline.preserve_audio_command(
+            "ffmpeg", Path("generated.mp4"), Path("accepted.mp4")
+        )
+        self.assertEqual(command.count("-i"), 1)
+        self.assertIn("0:v:0", command)
+        self.assertIn("0:a:0", command)
+        self.assertIn("copy", command)
+
     def test_schema_snapshot_fingerprints_contracts(self) -> None:
         contract = {"job_type": "seedance_2_0", "params": []}
         first = inspect_live_schema.stable_hash(contract)
