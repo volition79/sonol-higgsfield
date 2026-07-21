@@ -15,7 +15,17 @@ Use this as a decision tree, then verify the selected live schema and account ba
 
 ## Video
 
-- General multi-reference film shot: inspect `seedance_2_0` first.
+- Route per shot; do not use one universal serious-video default.
+- Camera character, genre, lighting, or grade is load-bearing: inspect
+  `cinematic_studio_video_3_5` and
+  [cinema-studio-3-5-production.md](cinema-studio-3-5-production.md). Use CLI
+  execution mode `model` (`generate create`), despite the contract also being
+  visible through `workflow get`.
+- Visible ElevenLabs V3-conditioned dialogue, continuity-first work, fragile
+  acting/object interaction, or native timecoded multi-shot: inspect
+  `seedance_2_0` first.
+- Balanced shot with no decisive signal: keep both as candidates and run one
+  representative A/B rather than silently forcing either model.
 - Low-cost motion test: inspect `seedance_2_0_mini` and compare its limits.
 - A model-specific need such as motion control, reframe, or drawn guidance:
   inspect the corresponding live model/workflow. Never force every shot through

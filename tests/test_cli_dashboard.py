@@ -30,7 +30,7 @@ class CliDashboardTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             production = Path(folder) / "production"
             created = subprocess.run(
-                [sys.executable, str(CLI), "init", str(production), "--name", "CLI Test"],
+                [sys.executable, str(CLI), "init", str(production), "--name", "CLI Test", "--mode", "CONTROLLED_SHOT", "--approval-profile", "TARGETED"],
                 text=True,
                 capture_output=True,
                 timeout=30,
@@ -52,7 +52,7 @@ class CliDashboardTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             production = Path(folder) / "production"
             subprocess.run(
-                [sys.executable, str(CLI), "init", str(production), "--name", "Web Test"],
+                [sys.executable, str(CLI), "init", str(production), "--name", "Web Test", "--mode", "SERIAL_STORY", "--approval-profile", "FULL"],
                 capture_output=True,
                 timeout=30,
                 check=True,

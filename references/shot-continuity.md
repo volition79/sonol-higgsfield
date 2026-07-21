@@ -2,7 +2,9 @@
 
 ## Shot record
 
-Every shot must resolve these before board approval:
+Every `FULL` serial shot must resolve these before board approval. `TARGETED`
+resolves only fields that carry the chosen shot; `LIGHT` does not force this
+entire record:
 
 1. `previous_scene_context`: the exact physical and narrative end state inherited.
 2. `current_shot_goal`: one narrative purpose.
@@ -27,7 +29,7 @@ describes boundary intent; an end image is still optional and exceptional.
 | Strategy | Use when | Start image | Planned keyframe |
 |---|---|---|---|
 | `continuous_match` | Scene, axis, action, and visual flow continue | Previous accepted boundary frame, alone | `analysis_only`: informs story re-alignment and the prompt; never transported |
-| `motivated_transition` | A simple camera move or bridge changes composition | Previous accepted boundary frame | Prompt exit state by default; optional `end_image` only when exact arrival matters |
+| `motivated_transition` | A simple camera move or bridge changes composition | Previous boundary only for true continuity; otherwise a fresh keyframe | Prompt exit state by default; distinct optional `end_keyframe` only when exact arrival matters |
 | `editorial_cut` | Reverse angle, reaction, insert, hard cut, or decisive shot-size change | Freshly composed keyframe, required | Same image (it is the start image) |
 | `scene_reset` | Place, time, style, or story unit changes | Freshly composed keyframe, required | Same image (it is the start image) |
 
@@ -50,13 +52,14 @@ reference is time-pinned. When arrival at a composition matters, first try a
 prompt exit state; use a bridge shot's `end_image` only when the destination is
 exact and the transition is simple, then start the following shot from the
 accepted rendered boundary rather than assuming pixel-perfect arrival.
-For `set-boundary motivated_transition`, omit `--planned-keyframe` for the
-default prompt-only route; providing it explicitly selects the end-image route.
+For `set-boundary motivated_transition`, `--planned-keyframe` is the start image
+when the prior frame is not inherited. Add a distinct `--end-keyframe` only for
+the exceptional exact-arrival route.
 
 ## Sequential adaptive story loop
 
-The story plan is a map; the footage is the territory. After each accepted
-shot:
+The story plan is a map; the footage is the territory. For an inherited
+continuous chain, after each accepted shot:
 
 1. Extract and QC the boundary frame.
 2. Read the frame like a director: pose, gaze, hands, props, framing, light,
@@ -69,11 +72,12 @@ shot:
 5. Compare the new clip's actual first frame against the submitted start image
    before accepting it.
 
-Persist these steps with `record-start-frame-qc`,
+Persist inherited-chain steps with `record-start-frame-qc`,
 `record-boundary-analysis`, and `set-adaptive-story`. The state gate requires
 the previous user acceptance, first-frame pass, analysis ID, current locked
-story-contract version, and JIT start provenance before a dependent shot can be
-queued. Semantic observations remain explicit agent/director judgments; only
+story-contract version, and matching boundary provenance. Cut/reset shots need
+prior acceptance and JIT start provenance but not a boundary analysis ID.
+Semantic observations remain explicit agent/director judgments; only
 frame sampling and blur scoring are automatic.
 
 ## Structured shot grammar
@@ -104,8 +108,8 @@ The video call and the start-frame composition step have different transports:
   `motivated_transition`, never the default continuity mechanism.
 - One essential image reference may be tested only after a documented
   start-only failure, with one changed variable and a matching manifest role.
-- A previous boundary frame becomes a start frame only for `continuous_match`
-  or `motivated_transition`.
+- A previous boundary frame becomes a start frame for `continuous_match`, or
+  for `motivated_transition` only when the action genuinely continues.
 - Audio reference carries only the locked dialogue conditioning reference on a
   visible-dialogue route.
 - Video reference (motion/camera behavior) requires an explicit recorded

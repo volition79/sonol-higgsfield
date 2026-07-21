@@ -146,21 +146,30 @@ class SeedanceContractTests(unittest.TestCase):
         compiled = self.compile(seedance_plan={"camera_invariants": ["no cuts", "no zoom", "natural head movement"]})
         self.assertIn("no cuts; no zoom; natural head movement", compiled["prompt"])
 
-    def test_multishot_requires_approval_and_timecoded_beats(self) -> None:
+    def test_native_multishot_requires_bounded_timecoded_beats_not_blanket_approval(self) -> None:
         plan = {
-            "mode": "seedance_multishot_experimental",
+            "mode": "native_multishot",
             "shot_count": 2,
             "timed_beats": [
                 {"time": "0-2s", "action": "wide establishing view"},
                 {"time": "2-5s", "action": "push in to the note"},
             ],
         }
-        with self.assertRaisesRegex(cine.CinematographyError, "explicit user approval"):
-            self.compile(seedance_plan=plan)
-        plan["experimental_approved"] = True
         compiled = self.compile(seedance_plan=plan)
         self.assertIn("Shot 1 [0-2s]", compiled["prompt"])
         self.assertIn("Shot 2 [2-5s]", compiled["prompt"])
+        missing = deepcopy(plan)
+        missing["timed_beats"] = missing["timed_beats"][:1]
+        with self.assertRaisesRegex(cine.CinematographyError, "one timed beat per shot"):
+            self.compile(seedance_plan=missing)
+        too_many = deepcopy(plan)
+        too_many["shot_count"] = 5
+        too_many["timed_beats"] = [
+            {"time": f"{index}-{index + 1}s", "action": f"simple beat {index + 1}"}
+            for index in range(5)
+        ]
+        with self.assertRaisesRegex(cine.CinematographyError, "limited to four"):
+            self.compile(seedance_plan=too_many)
 
     def test_reference_manifest_preserves_semantic_roles_without_alias_invention(self) -> None:
         references = {

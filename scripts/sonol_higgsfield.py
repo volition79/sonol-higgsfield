@@ -40,6 +40,10 @@ def parser() -> argparse.ArgumentParser:
     cmd = sub.add_parser("init", help="initialize a production directory")
     cmd.add_argument("production")
     cmd.add_argument("--name", required=True)
+    cmd.add_argument("--mode", choices=sorted(state.PRODUCTION_MODES), required=True)
+    cmd.add_argument("--approval-profile", choices=sorted(state.APPROVAL_PROFILES), required=True)
+    cmd.add_argument("--official-workflow", choices=("marketing_studio", "video_explainer"))
+    cmd.add_argument("--reason", default="selected by the production router")
 
     cmd = sub.add_parser("recommend-grammar", help="recommend intent-first shot grammar plans")
     cmd.add_argument("intent")
@@ -55,7 +59,7 @@ def parser() -> argparse.ArgumentParser:
         cmd = sub.add_parser(name)
         cmd.add_argument("production")
 
-    cmd = sub.add_parser("migrate", help="upgrade a v1-v6 production to the current schema")
+    cmd = sub.add_parser("migrate", help="upgrade a v1-v10 production to the current schema")
     cmd.add_argument("production")
 
     cmd = sub.add_parser("validate-grammar", help="validate one production shot grammar")
@@ -92,6 +96,14 @@ def parser() -> argparse.ArgumentParser:
     cmd.add_argument("production")
     cmd.add_argument("max_credits", type=float)
     cmd.add_argument("--actor", default="user")
+
+    cmd = sub.add_parser("set-production-policy", help="select adaptive production and approval modes")
+    cmd.add_argument("production")
+    cmd.add_argument("mode", choices=sorted(state.PRODUCTION_MODES))
+    cmd.add_argument("approval_profile", choices=sorted(state.APPROVAL_PROFILES))
+    cmd.add_argument("--official-workflow", choices=("marketing_studio", "video_explainer"))
+    cmd.add_argument("--reason", required=True)
+    cmd.add_argument("--actor", default="agent")
 
     cmd = sub.add_parser("lock-story", help="user-lock immutable story anchor beats")
     cmd.add_argument("production")
@@ -144,6 +156,7 @@ def parser() -> argparse.ArgumentParser:
     cmd.add_argument("--previous-shot-id")
     cmd.add_argument("--previous-frame")
     cmd.add_argument("--planned-keyframe")
+    cmd.add_argument("--end-keyframe")
     cmd.add_argument("--cut-type")
     cmd.add_argument("--actor", default="agent")
 
@@ -192,7 +205,7 @@ def parser() -> argparse.ArgumentParser:
     cmd = sub.add_parser("transition-generation")
     cmd.add_argument("production")
     cmd.add_argument("shot_id")
-    cmd.add_argument("target", choices=sorted(state.GENERATION_STATES))
+    cmd.add_argument("target", choices=("READY", "FAILED", "QC_FAILED", "FINAL_COMPLETE"))
     cmd.add_argument("--actor", default="agent")
     cmd.add_argument("--reason", default="")
 
@@ -204,12 +217,37 @@ def parser() -> argparse.ArgumentParser:
     cmd.add_argument("--actor", default="agent")
     cmd.add_argument("--note", default="")
 
+    cmd = sub.add_parser("record-director-analysis")
+    cmd.add_argument("production")
+    cmd.add_argument("shot_id")
+    cmd.add_argument("category", choices=sorted(state.default_director_intelligence()))
+    cmd.add_argument("analysis", type=json_object)
+    cmd.add_argument("--actor", default="agent")
+
+    cmd = sub.add_parser("review-attempt")
+    cmd.add_argument("production")
+    cmd.add_argument("shot_id")
+    cmd.add_argument("attempt_id")
+    cmd.add_argument("result", choices=("ACCEPTED", "REJECTED"))
+    cmd.add_argument("severity", choices=("NONE", "MINOR", "MAJOR", "CRITICAL"))
+    cmd.add_argument("--reject-reason", action="append", default=[])
+    cmd.add_argument("--human-confirmed", action="store_true")
+    cmd.add_argument("--notes", default="")
+    cmd.add_argument("--actor", default="agent")
+
     cmd = sub.add_parser("record-job")
     cmd.add_argument("production")
     cmd.add_argument("shot_id")
     cmd.add_argument("job_id")
     cmd.add_argument("--result-path")
     cmd.add_argument("--actor", default="agent")
+
+    cmd = sub.add_parser("resolve-submission", help="resolve an unknown submission after provider-history review")
+    cmd.add_argument("production")
+    cmd.add_argument("shot_id")
+    cmd.add_argument("resolution", choices=("NOT_SUBMITTED", "ABANDONED_RISK_ACCEPTED"))
+    cmd.add_argument("--reason", required=True)
+    cmd.add_argument("--actor", default="user")
 
     cmd = sub.add_parser("record-cost")
     cmd.add_argument("production")
@@ -229,7 +267,16 @@ def execute(args: argparse.Namespace) -> Any:
         )
     p = args.production
     if args.command == "init":
-        return {"production": str(state.initialize(p, args.name, SKILL_ROOT / "assets" / "dashboard-template"))}
+        policy = {
+            "mode": args.mode,
+            "approval_profile": args.approval_profile,
+            "official_workflow": args.official_workflow,
+            "managed_state": args.mode not in {"QUICK_CLIP", "OFFICIAL_WORKFLOW"},
+            "selected_by": "agent",
+            "selected_at": state.utc_now(),
+            "reason": args.reason,
+        }
+        return {"production": str(state.initialize(p, args.name, SKILL_ROOT / "assets" / "dashboard-template", policy))}
     if args.command == "validate":
         errors = state.validate(p)
         if errors:
@@ -259,6 +306,7 @@ def execute(args: argparse.Namespace) -> Any:
             subject=args.subject, setting=args.setting, action=args.action,
             exit_state=args.exit_state, invariants=args.invariant, live_schema=live_schema,
             seedance_plan=shot.get("seedance_plan"), references=shot.get("references"),
+            cinema35_plan=shot.get("cinema35_plan"),
             boundary_strategy=(shot.get("boundary") or {}).get("strategy"),
         )
         grammar = cinematography.apply_compilation(shot.get("shot_grammar", {}), compiled)
@@ -275,6 +323,10 @@ def execute(args: argparse.Namespace) -> Any:
         state.lock_requirements(p, args.actor)
     elif args.command == "approve-budget":
         state.approve_budget(p, args.max_credits, args.actor)
+    elif args.command == "set-production-policy":
+        state.set_production_policy(
+            p, args.mode, args.approval_profile, args.actor, args.reason, args.official_workflow
+        )
     elif args.command == "lock-story":
         state.lock_story_contract(p, args.anchor_beats, args.actor)
     elif args.command == "add-asset":
@@ -299,6 +351,7 @@ def execute(args: argparse.Namespace) -> Any:
             previous_shot_id=args.previous_shot_id,
             previous_frame=args.previous_frame,
             planned_keyframe=args.planned_keyframe,
+            end_keyframe=args.end_keyframe,
             cut_type=args.cut_type,
         )
     elif args.command == "record-boundary-analysis":
@@ -326,8 +379,19 @@ def execute(args: argparse.Namespace) -> Any:
         state.transition_generation(p, args.shot_id, args.target, args.actor, args.reason)
     elif args.command == "set-qc":
         state.set_qc(p, args.shot_id, args.check, args.status, args.actor, args.note)
+    elif args.command == "record-director-analysis":
+        state.record_director_analysis(p, args.shot_id, args.category, args.analysis, args.actor)
+    elif args.command == "review-attempt":
+        return state.record_attempt_review(
+            p, args.shot_id, args.attempt_id, args.result, args.reject_reason,
+            args.severity, args.actor, human_confirmed=args.human_confirmed, notes=args.notes,
+        )
     elif args.command == "record-job":
         state.record_job(p, args.shot_id, args.job_id, args.result_path, args.actor)
+    elif args.command == "resolve-submission":
+        state.resolve_submission_ambiguity(
+            p, args.shot_id, args.resolution, args.actor, args.reason
+        )
     elif args.command == "record-cost":
         state.record_actual_cost(p, args.entity_id, args.credits, args.actor, args.job_id)
     return {"ok": True, "command": args.command}

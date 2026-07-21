@@ -10,10 +10,12 @@ Official sources:
 - <https://higgsfield.ai/blog/generating-with-seedance-2-0>
 - <https://higgsfield.ai/blog/seedance-prompting-guide>
 
-## Safe default
+## Routed default
 
-Use `controlled_single_shot` unless the user explicitly accepts an experimental
-multi-shot generation. Start image-to-video with a sharp, front-facing,
+Use `controlled_single_shot` when one precise action, dialogue performance,
+object interaction, or camera result is load-bearing. Use `native_multishot`
+for two to four simple timecoded beats inside one clip when the whole-clip
+regeneration tradeoff is acceptable. Start image-to-video with a sharp, front-facing,
 well-lit image when possible. Prototype at 720p, eight seconds or less, and use
 an explicit audio mode. Compile `generate_audio=false` for post-only or silent
 routes. For no visible dialogue with production sound, use
@@ -32,12 +34,12 @@ motion must remain intact, inspect the live `video_upscale` or
 
 The compiler emits:
 
-1. shot count, total duration, aspect ratio, and shot mode;
-2. an instruction to begin on the provided start-image framing;
-3. subject and one primary action;
+1. the load-bearing action or change early in the prompt;
+2. shot count, total duration, aspect ratio, and shot mode;
+3. subject and start-image motion condition;
 4. one primary camera movement plus framing/focus;
 5. setting, lighting, and mood in one compact clause;
-6. numbered timecoded beats only for approved experimental multi-shot;
+6. numbered timecoded beats for routed native multi-shot;
 7. end state and at most three critical invariants;
 8. one compact audio clause containing the voice requirement, complete
    ambience, zero to three synchronized effects, music state, and exclusions.
@@ -50,13 +52,16 @@ allowed because they define the camera plan. Avoid generic negative-prompt
 lists.
 
 `controlled_single_shot` rejects cuts, montage language, multiple timed beats,
-or a shot count other than one. `seedance_multishot_experimental` requires:
+or a shot count other than one. `native_multishot` requires:
 
-- explicit user approval in `experimental_approved`;
-- two or more shots;
+- two to four simple beats;
 - exactly one `{time, action}` beat per shot;
 - acceptance that one failed internal beat normally requires regenerating the
   full provider clip.
+
+Use a minimum-sufficient prompt rather than a universal short limit. The linter
+warns about target ranges but blocks only actual contradictions or a missing
+declared load-bearing element.
 
 ## Image-input policy and reference manifest
 

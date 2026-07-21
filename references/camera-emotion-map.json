@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "strategies": {
+    "revelation": {
+      "follow": {"shot_size": "medium_close_up", "movement": "slow_push_in", "effect": "focus attention on the realization", "risk": "can feel ordinary if the expression is unclear"},
+      "contrast": {"shot_size": "wide", "movement": "static", "effect": "contrast private shock with an indifferent space", "risk": "reduces facial detail"}
+    },
+    "isolation": {
+      "follow": {"shot_size": "wide", "movement": "slow_pull_out", "effect": "make the subject feel progressively smaller", "risk": "requires stable background geometry"},
+      "contrast": {"shot_size": "close_up", "movement": "static", "effect": "trap attention inside the subject's reaction", "risk": "loses environmental scale"}
+    },
+    "urgency": {
+      "follow": {"shot_size": "medium", "movement": "tracking", "effect": "share the subject's momentum", "risk": "fast subject and camera motion can reduce stability"},
+      "contrast": {"shot_size": "wide", "movement": "static", "effect": "let urgent movement cross a stable frame", "risk": "precise blocking may be missed"}
+    },
+    "intimacy": {
+      "follow": {"shot_size": "close_up", "movement": "slow_push_in", "effect": "reduce emotional distance", "risk": "magnifies face artifacts"},
+      "contrast": {"shot_size": "medium_two_shot", "movement": "static", "effect": "show intimacy through shared space", "risk": "fine expressions are less legible"}
+    },
+    "dread": {
+      "follow": {"shot_size": "medium", "movement": "slow_push_in", "effect": "increase pressure gradually", "risk": "competes with complex subject motion"},
+      "contrast": {"shot_size": "overhead_wide", "movement": "static", "effect": "make the threat feel structural and inescapable", "risk": "identity and expression become secondary"}
+    },
+    "wonder": {
+      "follow": {"shot_size": "wide", "movement": "crane_up", "effect": "reveal scale with the subject", "risk": "large reveals may drift from the start image"},
+      "contrast": {"shot_size": "close_up", "movement": "static", "effect": "show wonder through a reaction instead of spectacle", "risk": "the source of wonder may remain unclear"}
+    }
+  }
+}

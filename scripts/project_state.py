@@ -14,10 +14,21 @@ from pathlib import Path
 from typing import Any, Iterable
 
 import cinematography
+import director_intelligence
 import execution_contract
 
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 11
+
+SUBMISSION_SURFACES = {"cli", "web_ui", "mcp", "external", "unknown"}
+PRODUCTION_MODES = {
+    "QUICK_CLIP",
+    "NATIVE_MULTISHOT",
+    "CONTROLLED_SHOT",
+    "SERIAL_STORY",
+    "OFFICIAL_WORKFLOW",
+}
+APPROVAL_PROFILES = {"LIGHT", "TARGETED", "FULL"}
 REQUIRED_REQUIREMENTS = (
     "purpose",
     "core_message",
@@ -72,8 +83,13 @@ SHOT_APPROVAL_TRANSITIONS = {
 GENERATION_STATES = {
     "PLANNED",
     "READY",
+    "SUBMITTING",
+    "SUBMISSION_AMBIGUOUS",
+    "SUBMITTED",
     "QUEUED",
-    "GENERATING",
+    "RUNNING",
+    "REMOTE_UNKNOWN",
+    "PROVIDER_COMPLETED",
     "GENERATED",
     "FAILED",
     "QC_FAILED",
@@ -81,11 +97,16 @@ GENERATION_STATES = {
 }
 GENERATION_TRANSITIONS = {
     "PLANNED": {"READY", "FAILED"},
-    "READY": {"QUEUED", "FAILED"},
-    "QUEUED": {"GENERATING", "FAILED"},
-    "GENERATING": {"GENERATED", "FAILED"},
+    "READY": {"SUBMITTING", "FAILED"},
+    "SUBMITTING": {"SUBMITTED", "SUBMISSION_AMBIGUOUS", "FAILED"},
+    "SUBMISSION_AMBIGUOUS": {"SUBMITTED", "FAILED"},
+    "SUBMITTED": {"QUEUED", "RUNNING", "REMOTE_UNKNOWN", "PROVIDER_COMPLETED", "FAILED"},
+    "QUEUED": {"SUBMITTED", "RUNNING", "REMOTE_UNKNOWN", "PROVIDER_COMPLETED", "FAILED"},
+    "RUNNING": {"SUBMITTED", "QUEUED", "REMOTE_UNKNOWN", "PROVIDER_COMPLETED", "FAILED"},
+    "REMOTE_UNKNOWN": {"SUBMITTED", "QUEUED", "RUNNING", "PROVIDER_COMPLETED", "FAILED"},
+    "PROVIDER_COMPLETED": {"GENERATED"},
     "GENERATED": {"QC_FAILED", "FINAL_COMPLETE", "READY"},
-    "FAILED": {"READY"},
+    "FAILED": {"READY", "SUBMITTED", "QUEUED", "RUNNING", "REMOTE_UNKNOWN", "PROVIDER_COMPLETED"},
     "QC_FAILED": {"READY", "FINAL_COMPLETE"},
     "FINAL_COMPLETE": set(),
 }
@@ -212,6 +233,8 @@ def default_boundary_plan() -> dict[str, Any]:
         "previous_boundary_frame": None,
         "planned_keyframe": None,
         "planned_keyframe_role": "none",
+        "end_keyframe": None,
+        "end_keyframe_role": "none",
         "cut_type": None,
         "reason": None,
         "start_image_provenance": {
@@ -310,7 +333,43 @@ def default_start_image_review() -> dict[str, Any]:
     }
 
 
-def initialize(root: str | Path, name: str, template_dir: Path) -> Path:
+def default_generation_attempts() -> dict[str, Any]:
+    return {
+        "active_attempt_id": None,
+        "attempts": [],
+    }
+
+
+def default_production_policy() -> dict[str, Any]:
+    """Backwards-safe managed default; the router may select a lighter path."""
+    return {
+        "mode": "SERIAL_STORY",
+        "approval_profile": "FULL",
+        "official_workflow": None,
+        "managed_state": True,
+        "selected_by": None,
+        "selected_at": None,
+        "reason": "default for migrated and explicitly managed productions",
+    }
+
+
+def default_director_intelligence() -> dict[str, Any]:
+    return {
+        "provider_strategy": None,
+        "performance_direction": None,
+        "camera_intent": None,
+        "prompt_lint": None,
+        "complexity": None,
+        "failure_analysis": None,
+    }
+
+
+def initialize(
+    root: str | Path,
+    name: str,
+    template_dir: Path,
+    production_policy: dict[str, Any] | None = None,
+) -> Path:
     production = _root(root)
     if production.exists() and any(production.iterdir()):
         raise StateError(f"production directory is not empty: {production}")
@@ -320,6 +379,17 @@ def initialize(root: str | Path, name: str, template_dir: Path) -> Path:
         (production / "media" / media_type).mkdir(parents=True, exist_ok=True)
     shutil.copytree(template_dir, production / "dashboard", dirs_exist_ok=True)
 
+    initial_policy = deepcopy(production_policy or default_production_policy())
+    if initial_policy.get("mode") not in PRODUCTION_MODES:
+        raise StateError("initial production policy has an invalid mode")
+    if initial_policy.get("approval_profile") not in APPROVAL_PROFILES:
+        raise StateError("initial production policy has an invalid approval profile")
+    if initial_policy.get("mode") == "OFFICIAL_WORKFLOW" and initial_policy.get("official_workflow") not in {"marketing_studio", "video_explainer"}:
+        raise StateError("official workflow mode requires marketing_studio or video_explainer")
+    if initial_policy.get("mode") != "OFFICIAL_WORKFLOW" and initial_policy.get("official_workflow") is not None:
+        raise StateError("official_workflow is only valid for OFFICIAL_WORKFLOW mode")
+    for key, value in default_production_policy().items():
+        initial_policy.setdefault(key, deepcopy(value))
     project = _base_document() | {
         "project": {
             "id": "PROJECT_001",
@@ -348,6 +418,7 @@ def initialize(root: str | Path, name: str, template_dir: Path) -> Path:
             "unpriced_job_risk_acknowledged": False,
         },
         "story_contract": default_story_contract(),
+        "production_policy": initial_policy,
     }
     requirements = _base_document() | {
         "fields": {
@@ -374,7 +445,13 @@ def initialize(root: str | Path, name: str, template_dir: Path) -> Path:
             "covered_shots": 0,
             "total_shots": 0,
         },
-        "actual": {"credits": 0.0, "transactions": [], "reconciliation_required": False, "pending": []},
+        "actual": {
+            "credits": 0.0,
+            "transactions": [],
+            "reconciliation_required": False,
+            "pending": [],
+            "ceiling_breach": False,
+        },
         "cash_value": {"status": "UNKNOWN", "value": None, "currency": None},
     }
     history = _base_document() | {"events": []}
@@ -401,7 +478,7 @@ def migrate(root: str | Path) -> dict[str, Any]:
     if versions == {SCHEMA_VERSION}:
         return {"migrated": False, "schema_version": SCHEMA_VERSION}
     only_version = next(iter(versions)) if len(versions) == 1 else None
-    if only_version not in {1, 2, 3, 4, 5, 6}:
+    if only_version not in {1, 2, 3, 4, 5, 6, 7, 8, 9, 10}:
         raise StateError(f"cannot migrate mixed or unsupported schema versions: {sorted(versions, key=str)}")
     assert isinstance(only_version, int)
     from_version = only_version
@@ -414,6 +491,7 @@ def migrate(root: str | Path) -> dict[str, Any]:
         else:
             binding = shot["shot_grammar"].setdefault("provider_binding", {})
             binding.setdefault("schema_contract_hash", None)
+            binding.setdefault("prompt_lint", None)
         shot.setdefault("seedance_plan", cinematography.default_seedance_plan())
         for key, value in cinematography.default_seedance_plan().items():
             shot["seedance_plan"].setdefault(key, deepcopy(value))
@@ -422,12 +500,17 @@ def migrate(root: str | Path) -> dict[str, Any]:
         )
         for key, value in cinematography.default_seedance_plan()["image_input_policy"].items():
             image_policy.setdefault(key, deepcopy(value))
+        shot.setdefault("cinema35_plan", cinematography.default_cinema35_plan())
+        for key, value in cinematography.default_cinema35_plan().items():
+            shot["cinema35_plan"].setdefault(key, deepcopy(value))
         if from_version <= 4 and shot["seedance_plan"].get("audio_mode") == "none":
             shot["seedance_plan"]["audio_mode"] = "post_only"
         references = shot.setdefault("references", {})
         references.setdefault("manifest", [])
         shot.setdefault("boundary", default_boundary_plan())
         boundary = shot["boundary"]
+        for key, value in default_boundary_plan().items():
+            boundary.setdefault(key, deepcopy(value))
         boundary.setdefault("start_image_provenance", deepcopy(default_boundary_plan()["start_image_provenance"]))
         shot.setdefault("story", default_shot_story())
         shot.setdefault("boundary_analysis", default_boundary_analysis())
@@ -474,6 +557,56 @@ def migrate(root: str | Path) -> dict[str, Any]:
         generation.pop("cost_options", None)
         execution = generation.setdefault("execution", {"mode": None, "argv": []})
         execution.setdefault("fingerprint", None)
+        generation.setdefault("active_attempt_id", None)
+        shot.setdefault("director_intelligence", default_director_intelligence())
+        for key, value in default_director_intelligence().items():
+            shot["director_intelligence"].setdefault(key, deepcopy(value))
+        attempts = generation.setdefault("attempts", [])
+        legacy_status = generation.get("status")
+        legacy_job_id = generation.get("job_id")
+        if not attempts and (legacy_job_id or legacy_status in {"QUEUED", "GENERATING"}):
+            attempt_id = "ATTEMPT_MIGRATED_001"
+            remote_status = "COMPLETED" if legacy_status in {"GENERATED", "QC_FAILED", "FINAL_COMPLETE"} else "UNKNOWN"
+            resolution = "RECORDED" if remote_status == "COMPLETED" else "PENDING"
+            attempts.append(
+                {
+                    "attempt_id": attempt_id,
+                    "generation_version": generation.get("version", 1),
+                    "execution_fingerprint": execution.get("fingerprint"),
+                    "provider": generation.get("model"),
+                    "submission_surface": "unknown",
+                    "mode": execution.get("mode"),
+                    "match_signature": None,
+                    "started_at": shot.get("updated_at") or utc_now(),
+                    "submitted_at": shot.get("updated_at") if legacy_job_id else None,
+                    "last_checked_at": None,
+                    "resolved_at": shot.get("updated_at") if resolution == "RECORDED" else None,
+                    "job_id": legacy_job_id,
+                    "remote_status": remote_status,
+                    "raw_remote_status": None,
+                    "resolution": resolution,
+                    "ambiguity_reason": "migrated legacy in-flight state" if resolution == "PENDING" else None,
+                    "account_credits_before": None,
+                    "account_credits_after": None,
+                    "cost_uncertainty_acknowledged": False,
+                    "result_available": legacy_status in {"GENERATED", "QC_FAILED", "FINAL_COMPLETE"},
+                    "result_path": generation.get("result_path"),
+                }
+            )
+            if resolution == "PENDING":
+                generation["active_attempt_id"] = attempt_id
+        for attempt in attempts:
+            if isinstance(attempt, dict):
+                attempt.setdefault("cost_uncertainty_acknowledged", False)
+                attempt.setdefault("review", None)
+                attempt.setdefault("submission_surface", "unknown")
+                attempt.setdefault("result_path", generation.get("result_path"))
+        if legacy_status == "GENERATING":
+            generation["status"] = "SUBMITTED" if legacy_job_id else "SUBMISSION_AMBIGUOUS"
+        elif legacy_status == "QUEUED" and not legacy_job_id:
+            generation["status"] = "SUBMISSION_AMBIGUOUS"
+        elif legacy_job_id and generation.get("active_attempt_id"):
+            generation["status"] = "SUBMITTED"
         shot.setdefault("qc", {})["cinematography"] = "PENDING"
     approval = state["project"].setdefault("cost_approval", {})
     approval.pop("scenario", None)
@@ -481,6 +614,7 @@ def migrate(root: str | Path) -> dict[str, Any]:
     approval.setdefault("mode", "PROJECT_CEILING")
     approval.setdefault("unpriced_job_risk_acknowledged", approval.get("status") == "APPROVED")
     state["project"].setdefault("story_contract", default_story_contract())
+    state["project"].setdefault("production_policy", default_production_policy())
     costs = state["costs"]
     costs.pop("scenarios", None)
     costs.pop("task_estimates", None)
@@ -498,6 +632,11 @@ def migrate(root: str | Path) -> dict[str, Any]:
     actual = costs.setdefault("actual", {"credits": 0.0, "transactions": []})
     actual.setdefault("reconciliation_required", False)
     actual.setdefault("pending", [])
+    ceiling = approval.get("max_credits")
+    actual.setdefault(
+        "ceiling_breach",
+        ceiling is not None and float(actual.get("credits", 0) or 0) > float(ceiling),
+    )
     for name, document in state.items():
         document["schema_version"] = SCHEMA_VERSION
         document["updated_at"] = utc_now()
@@ -533,6 +672,116 @@ def invalidate_reference_estimates(root: str | Path, actor: str, reason: str) ->
     costs["updated_at"] = utc_now()
     atomic_write_json(costs_path, costs)
     append_history(root, "reference_estimates_invalidated", actor, "cost", "production", {"reason": reason})
+
+
+def set_production_policy(
+    root: str | Path,
+    mode: str,
+    approval_profile: str,
+    actor: str,
+    reason: str,
+    official_workflow: str | None = None,
+) -> None:
+    """Persist a routing decision without changing or cancelling provider jobs."""
+    if mode not in PRODUCTION_MODES:
+        raise StateError(f"invalid production mode: {mode}")
+    if approval_profile not in APPROVAL_PROFILES:
+        raise StateError(f"invalid approval profile: {approval_profile}")
+    if not reason.strip():
+        raise StateError("production policy reason is required")
+    if mode == "OFFICIAL_WORKFLOW" and official_workflow not in {"marketing_studio", "video_explainer"}:
+        raise StateError("official workflow mode requires marketing_studio or video_explainer")
+    if mode != "OFFICIAL_WORKFLOW" and official_workflow is not None:
+        raise StateError("official_workflow is only valid for OFFICIAL_WORKFLOW mode")
+    path = data_dir(root) / "project.json"
+    project = read_json(path)
+    project["production_policy"] = {
+        "mode": mode,
+        "approval_profile": approval_profile,
+        "official_workflow": official_workflow,
+        "managed_state": mode not in {"QUICK_CLIP", "OFFICIAL_WORKFLOW"},
+        "selected_by": actor,
+        "selected_at": utc_now(),
+        "reason": reason.strip(),
+    }
+    project["updated_at"] = utc_now()
+    atomic_write_json(path, project)
+    append_history(root, "production_policy_selected", actor, "project", "PROJECT_001", project["production_policy"])
+    sync_dashboard(root)
+
+
+def record_director_analysis(
+    root: str | Path,
+    shot_id: str,
+    category: str,
+    analysis: dict[str, Any],
+    actor: str,
+) -> None:
+    allowed = set(default_director_intelligence())
+    if category not in allowed:
+        raise StateError("invalid director-intelligence category: " + category)
+    if not isinstance(analysis, dict):
+        raise StateError("director analysis must be a JSON object")
+    path = data_dir(root) / "shots.json"
+    shots = read_json(path)
+    shot = _find(shots.get("items", []), shot_id, "shot")
+    shot.setdefault("director_intelligence", default_director_intelligence())[category] = deepcopy(analysis)
+    shot["updated_at"] = utc_now()
+    shots["updated_at"] = utc_now()
+    atomic_write_json(path, shots)
+    append_history(root, "director_analysis_recorded", actor, "shot", shot_id, {"category": category})
+    sync_dashboard(root)
+
+
+def record_attempt_review(
+    root: str | Path,
+    shot_id: str,
+    attempt_id: str,
+    result: str,
+    reject_reasons: list[str],
+    severity: str,
+    actor: str,
+    *,
+    human_confirmed: bool = False,
+    notes: str = "",
+) -> dict[str, Any]:
+    if result not in {"ACCEPTED", "REJECTED"}:
+        raise StateError("attempt review result must be ACCEPTED or REJECTED")
+    if severity not in {"MINOR", "MAJOR", "CRITICAL", "NONE"}:
+        raise StateError("invalid attempt review severity")
+    valid_reasons = set(director_intelligence._load("reject-reasons.json")["reasons"])
+    unknown = sorted(set(reject_reasons) - valid_reasons)
+    if unknown:
+        raise StateError("unknown reject reasons: " + ", ".join(unknown))
+    if result == "ACCEPTED" and reject_reasons:
+        raise StateError("accepted attempt must not carry reject reasons")
+    path = data_dir(root) / "shots.json"
+    shots = read_json(path)
+    shot = _find(shots.get("items", []), shot_id, "shot")
+    attempt = next((item for item in shot.get("generation", {}).get("attempts", []) if item.get("attempt_id") == attempt_id), None)
+    if attempt is None:
+        raise StateError(f"unknown generation attempt: {attempt_id}")
+    if not attempt.get("result_available"):
+        raise StateError("generation attempt cannot be reviewed before a provider result is available")
+    review = {
+        "result": result,
+        "reject_reasons": list(dict.fromkeys(reject_reasons)),
+        "severity": severity,
+        "human_confirmed": bool(human_confirmed),
+        "notes": notes or None,
+        "reviewed_by": actor,
+        "reviewed_at": utc_now(),
+    }
+    attempt["review"] = review
+    comparable = [item["review"] for item in shot["generation"]["attempts"] if isinstance(item.get("review"), dict)]
+    analysis = director_intelligence.diagnose_failures(comparable)
+    shot.setdefault("director_intelligence", default_director_intelligence())["failure_analysis"] = analysis
+    shot["updated_at"] = utc_now()
+    shots["updated_at"] = utc_now()
+    atomic_write_json(path, shots)
+    append_history(root, "generation_attempt_reviewed", actor, "shot", shot_id, {"attempt_id": attempt_id, "result": result, "reject_reasons": review["reject_reasons"]})
+    sync_dashboard(root)
+    return analysis
 
 
 def set_requirement(
@@ -616,7 +865,8 @@ def approve_budget(root: str | Path, max_credits: float, actor: str) -> None:
     project_path = data_dir(root) / "project.json"
     project = read_json(project_path)
     costs = read_json(data_dir(root) / "costs.json")
-    if project.get("requirements_lock", {}).get("status") != "LOCKED":
+    profile = ((project.get("production_policy") or {}).get("approval_profile") or "FULL")
+    if profile == "FULL" and project.get("requirements_lock", {}).get("status") != "LOCKED":
         raise StateError("requirements must be locked before budget approval")
     actual = float(costs.get("actual", {}).get("credits", 0) or 0)
     if max_credits < actual:
@@ -633,13 +883,17 @@ def approve_budget(root: str | Path, max_credits: float, actor: str) -> None:
     )
     project["updated_at"] = utc_now()
     atomic_write_json(project_path, project)
+    costs_actual = costs.setdefault("actual", {})
+    costs_actual["ceiling_breach"] = actual > max_credits
+    costs["updated_at"] = utc_now()
+    atomic_write_json(data_dir(root) / "costs.json", costs)
     append_history(
         root,
         "project_credit_ceiling_approved",
         actor,
         "project",
         project["project"]["id"],
-        {"max_credits": max_credits, "live_quote_removed": True},
+        {"max_credits": max_credits, "live_quote_removed": True, "approval_profile": profile},
     )
     sync_dashboard(root)
 
@@ -785,6 +1039,8 @@ def add_shot(root: str | Path, shot_id: str, scene_id: str, title: str, order: i
             "manifest": [],
         },
         "seedance_plan": cinematography.default_seedance_plan(),
+        "cinema35_plan": cinematography.default_cinema35_plan(),
+        "director_intelligence": default_director_intelligence(),
         "approval_status": "DRAFT",
         "approved_by": None,
         "approved_at": None,
@@ -796,6 +1052,7 @@ def add_shot(root: str | Path, shot_id: str, scene_id: str, title: str, order: i
             "retry_count": 0,
             "execution": {"mode": None, "argv": [], "fingerprint": None},
             "result_path": None,
+            **default_generation_attempts(),
         },
         "audio": default_audio_plan(),
         "qc": {
@@ -837,6 +1094,7 @@ def update_shot(root: str | Path, shot_id: str, patch: dict[str, Any], actor: st
         "execution",
         "shot_grammar",
         "seedance_plan",
+        "cinema35_plan",
         "story",
         "start_image_review",
     }
@@ -846,6 +1104,19 @@ def update_shot(root: str | Path, shot_id: str, patch: dict[str, Any], actor: st
     path = data_dir(root) / "shots.json"
     shots = read_json(path)
     shot = _find(shots.get("items", []), shot_id, "shot")
+    submission_sensitive = set(patch) - {"title", "purpose"}
+    if submission_sensitive and unresolved_submission(shot):
+        raise StateError(
+            "cannot change submitted generation inputs while a provider attempt is unresolved; reconcile or resolve it first"
+        )
+    if not submission_sensitive and unresolved_submission(shot):
+        shot.update(deepcopy(patch))
+        shot["updated_at"] = utc_now()
+        shots["updated_at"] = utc_now()
+        atomic_write_json(path, shots)
+        append_history(root, "shot_metadata_updated", actor, "shot", shot_id, {"fields": sorted(patch)})
+        sync_dashboard(root)
+        return
     normalized = deepcopy(patch)
     if "model" in normalized:
         shot["generation"]["model"] = normalized.pop("model")
@@ -874,7 +1145,7 @@ def update_shot(root: str | Path, shot_id: str, patch: dict[str, Any], actor: st
         isinstance(normalized.get("seedance_plan"), dict)
         and "image_input_policy" in normalized["seedance_plan"]
     )
-    for nested in ("continuity", "boundary", "references", "audio", "seedance_plan", "story", "start_image_review"):
+    for nested in ("continuity", "boundary", "references", "audio", "seedance_plan", "cinema35_plan", "story", "start_image_review"):
         if nested in normalized:
             value = normalized.pop(nested)
             if not isinstance(value, dict):
@@ -891,7 +1162,9 @@ def update_shot(root: str | Path, shot_id: str, patch: dict[str, Any], actor: st
         shot["approval_status"] = "DRAFT"
         shot.update({"approved_by": None, "approved_at": None})
         shot["generation"]["version"] = int(shot["generation"].get("version", 1)) + 1
-    shot["generation"].update({"status": "PLANNED", "job_id": None, "result_path": None})
+    shot["generation"].update(
+        {"status": "PLANNED", "active_attempt_id": None, "job_id": None, "result_path": None}
+    )
     shot["qc"] = {key: "PENDING" for key in shot["qc"]}
     shot["final_included"] = False
     shot["updated_at"] = utc_now()
@@ -900,7 +1173,7 @@ def update_shot(root: str | Path, shot_id: str, patch: dict[str, Any], actor: st
     append_history(root, "shot_updated", actor, "shot", shot_id, {"fields": sorted(patch)})
     cost_fields = {
         "duration_seconds", "references", "model",
-        "execution", "seedance_plan", "shot_grammar",
+        "execution", "seedance_plan", "cinema35_plan", "shot_grammar",
     }
     if cost_fields & set(patch):
         invalidate_reference_estimates(root, actor, "shot execution profile changed: " + ", ".join(sorted(cost_fields & set(patch))))
@@ -917,6 +1190,7 @@ def set_boundary(
     previous_shot_id: str | None = None,
     previous_frame: str | None = None,
     planned_keyframe: str | None = None,
+    end_keyframe: str | None = None,
     cut_type: str | None = None,
 ) -> None:
     if strategy not in BOUNDARY_STRATEGIES:
@@ -936,21 +1210,26 @@ def set_boundary(
             raise StateError("next boundary cannot be set before the previous sequential shot is generated")
         if chronological_previous.get("qc", {}).get("user_review") != "PASSED":
             raise StateError("next boundary cannot be set before previous user acceptance")
-        if (chronological_previous.get("start_frame_qc") or {}).get("status") != "PASSED":
-            raise StateError("next boundary cannot be set before previous start-frame QC passes")
         previous_analysis = chronological_previous.get("boundary_analysis") or {}
-        if previous_analysis.get("status") != "COMPLETE":
-            raise StateError("next boundary cannot be set before previous boundary analysis")
     references = deepcopy(shot.get("references") or {})
     # Reset every boundary to the minimum-sufficient baseline. A later explicit
     # recovery patch may add one evidenced essential image reference.
     references["images"] = []
     references["end"] = None
-    if strategy in {"continuous_match", "motivated_transition"}:
+    wants_inheritance = strategy == "continuous_match" or (
+        strategy == "motivated_transition" and bool(previous_shot_id or previous_frame)
+    )
+    if bool(previous_shot_id) != bool(previous_frame):
+        raise StateError("previous_shot_id and previous_frame must be supplied together")
+    if wants_inheritance:
         if not previous_shot_id or not previous_frame:
             raise StateError("continuous boundary requires previous_shot_id and previous_frame")
-        if chronological_previous_id is None or previous_shot_id != chronological_previous_id:
+        if chronological_previous is None or chronological_previous_id is None or previous_shot_id != chronological_previous_id:
             raise StateError("chained boundary must use the immediate previous sequential shot")
+        if (chronological_previous.get("start_frame_qc") or {}).get("status") != "PASSED":
+            raise StateError("inherited boundary requires previous start-frame QC to pass")
+        if previous_analysis.get("status") != "COMPLETE":
+            raise StateError("inherited boundary requires previous boundary analysis")
         if previous_frame != previous_analysis.get("frame_path"):
             raise StateError("chained boundary must use the selected previous boundary-analysis frame")
         references["start"] = previous_frame
@@ -958,7 +1237,7 @@ def set_boundary(
         provenance = {"mode": "previous_boundary", "created_after_shot_id": previous_shot_id, "created_at": utc_now()}
     else:
         if not planned_keyframe:
-            raise StateError("editorial cut or scene reset requires a composed planned_keyframe start image")
+            raise StateError("non-inherited boundary requires a composed planned_keyframe start image")
         previous_shot_id = chronological_previous_id
         previous_frame = None
         references["start"] = planned_keyframe
@@ -968,19 +1247,20 @@ def set_boundary(
             "created_after_shot_id": chronological_previous_id,
             "created_at": utc_now(),
         }
-    if strategy == "motivated_transition" and planned_keyframe:
-        references["end"] = planned_keyframe
-        role = "end_image"
-    elif strategy == "motivated_transition":
-        role = "none"
-    elif strategy == "continuous_match":
+    if wants_inheritance:
         # A pre-designed keyframe may inform story re-alignment and the prompt,
         # but it is never transported in the video call.
         role = "analysis_only" if planned_keyframe else "none"
     else:
         role = "start_image"
+    end_role = "none"
+    if end_keyframe:
+        if strategy != "motivated_transition":
+            raise StateError("end_keyframe is allowed only for a motivated transition")
+        references["end"] = end_keyframe
+        end_role = "end_image"
     image_input_policy = deepcopy(cinematography.default_seedance_plan()["image_input_policy"])
-    if strategy == "motivated_transition" and planned_keyframe:
+    if end_keyframe:
         image_input_policy.update({"mode": "start_end_transition", "rationale": reason.strip()})
     update_shot(
         root,
@@ -993,6 +1273,8 @@ def set_boundary(
                 "previous_boundary_frame": previous_frame,
                 "planned_keyframe": planned_keyframe,
                 "planned_keyframe_role": role,
+                "end_keyframe": end_keyframe,
+                "end_keyframe_role": end_role,
                 "cut_type": cut_type,
                 "reason": reason,
                 "start_image_provenance": provenance,
@@ -1260,12 +1542,13 @@ def set_adaptive_story(
             raise StateError("adaptive story requires the previous generated shot")
         if previous.get("qc", {}).get("user_review") != "PASSED":
             raise StateError("adaptive story requires previous user acceptance")
-        if (previous.get("start_frame_qc") or {}).get("status") != "PASSED":
-            raise StateError("adaptive story requires previous start-frame QC")
-        analysis = previous.get("boundary_analysis") or {}
-        if analysis.get("status") != "COMPLETE":
-            raise StateError("adaptive story requires the previous boundary analysis")
-        analysis_id = analysis.get("analysis_id")
+        if (shot.get("boundary") or {}).get("inherit_previous_last_frame") is True:
+            if (previous.get("start_frame_qc") or {}).get("status") != "PASSED":
+                raise StateError("inherited adaptation requires previous start-frame QC")
+            analysis = previous.get("boundary_analysis") or {}
+            if analysis.get("status") != "COMPLETE":
+                raise StateError("inherited adaptation requires the previous boundary analysis")
+            analysis_id = analysis.get("analysis_id")
     audio = shot.get("audio") or {}
     master_hash = (
         audio.get("dialogue_reference_sha256")
@@ -1320,21 +1603,444 @@ def store_reference_estimates(root: str | Path, estimates: dict[str, Any], actor
     sync_dashboard(root)
 
 
+def _active_attempt(shot: dict[str, Any]) -> dict[str, Any] | None:
+    attempt_id = (shot.get("generation") or {}).get("active_attempt_id")
+    if not attempt_id:
+        return None
+    return next(
+        (
+            item
+            for item in (shot.get("generation") or {}).get("attempts", [])
+            if item.get("attempt_id") == attempt_id
+        ),
+        None,
+    )
+
+
+def unresolved_submission(shot: dict[str, Any]) -> bool:
+    attempt = _active_attempt(shot)
+    return bool(attempt and attempt.get("resolution") == "PENDING")
+
+
+def active_submission_attempt(root: str | Path, shot_id: str) -> dict[str, Any] | None:
+    shots = read_json(data_dir(root) / "shots.json")
+    shot = _find(shots.get("items", []), shot_id, "shot")
+    attempt = _active_attempt(shot)
+    return deepcopy(attempt) if attempt is not None else None
+
+
+def start_submission_attempt(
+    root: str | Path,
+    shot_id: str,
+    actor: str,
+    *,
+    provider: str,
+    mode: str,
+    execution_fingerprint: str,
+    match_signature: dict[str, Any],
+    account_credits_before: float | None,
+    cost_uncertainty_acknowledged: bool = False,
+    submission_surface: str = "cli",
+) -> str:
+    if submission_surface not in SUBMISSION_SURFACES - {"unknown"}:
+        raise StateError(f"invalid submission surface: {submission_surface}")
+    state = load_all(root)
+    shot = _find(state["shots"].get("items", []), shot_id, "shot")
+    if shot.get("generation", {}).get("status") != "READY":
+        raise StateError("shot generation status must be READY")
+    gates = shot_gate_errors(state, shot)
+    if gates:
+        raise StateError("generation gate failed: " + "; ".join(gates))
+    if unresolved_submission(shot):
+        raise StateError("an unresolved provider submission must be reconciled before a new attempt")
+    generation = shot["generation"]
+    attempts = generation.setdefault("attempts", [])
+    attempt_id = f"ATTEMPT_{len(attempts) + 1:03d}"
+    attempt = {
+        "attempt_id": attempt_id,
+        "generation_version": generation.get("version", 1),
+        "execution_fingerprint": execution_fingerprint,
+        "provider": provider,
+        "submission_surface": submission_surface,
+        "mode": mode,
+        "match_signature": deepcopy(match_signature),
+        "started_at": utc_now(),
+        "submitted_at": None,
+        "last_checked_at": None,
+        "resolved_at": None,
+        "job_id": None,
+        "remote_status": "UNKNOWN",
+        "raw_remote_status": None,
+        "resolution": "PENDING",
+        "ambiguity_reason": None,
+        "account_credits_before": account_credits_before,
+        "account_credits_after": None,
+        "cost_uncertainty_acknowledged": bool(cost_uncertainty_acknowledged),
+        "result_available": False,
+        "result_path": None,
+        "review": None,
+    }
+    attempts.append(attempt)
+    generation.update(
+        {
+            "status": "SUBMITTING",
+            "active_attempt_id": attempt_id,
+            "job_id": None,
+            "result_path": None,
+        }
+    )
+    shot["updated_at"] = utc_now()
+    state["shots"]["updated_at"] = utc_now()
+    atomic_write_json(data_dir(root) / "shots.json", state["shots"])
+    append_history(
+        root,
+        "submission_attempt_started",
+        actor,
+        "shot",
+        shot_id,
+        {
+            "attempt_id": attempt_id,
+            "provider": provider,
+            "submission_surface": submission_surface,
+            "execution_fingerprint": execution_fingerprint,
+            "cost_uncertainty_acknowledged": bool(cost_uncertainty_acknowledged),
+        },
+    )
+    sync_dashboard(root)
+    return attempt_id
+
+
+def mark_submission_ambiguous(
+    root: str | Path,
+    shot_id: str,
+    actor: str,
+    reason: str,
+) -> None:
+    path = data_dir(root) / "shots.json"
+    shots = read_json(path)
+    shot = _find(shots.get("items", []), shot_id, "shot")
+    attempt = _active_attempt(shot)
+    if attempt is None:
+        raise StateError("shot has no active submission attempt")
+    attempt.update(
+        {
+            "remote_status": "UNKNOWN",
+            "last_checked_at": utc_now(),
+            "ambiguity_reason": reason,
+            "resolution": "PENDING",
+        }
+    )
+    shot["generation"]["status"] = "SUBMISSION_AMBIGUOUS"
+    shot["updated_at"] = utc_now()
+    shots["updated_at"] = utc_now()
+    atomic_write_json(path, shots)
+    append_history(
+        root,
+        "submission_became_ambiguous",
+        actor,
+        "shot",
+        shot_id,
+        {"attempt_id": attempt.get("attempt_id"), "reason": reason},
+    )
+    sync_dashboard(root)
+
+
 def record_job(
     root: str | Path,
     shot_id: str,
     job_id: str,
     result_path: str | None,
     actor: str,
+    *,
+    provider: str | None = None,
+    submission_surface: str | None = None,
 ) -> None:
+    if not isinstance(job_id, str) or not job_id.strip():
+        raise StateError("job_id must be a non-empty string")
+    if submission_surface is not None and submission_surface not in SUBMISSION_SURFACES - {"unknown"}:
+        raise StateError(f"invalid submission surface: {submission_surface}")
     path = data_dir(root) / "shots.json"
     shots = read_json(path)
     shot = _find(shots.get("items", []), shot_id, "shot")
-    shot["generation"].update({"job_id": job_id, "result_path": result_path})
+    for other in shots.get("items", []):
+        if other.get("id") == shot_id:
+            continue
+        other_generation = other.get("generation") or {}
+        other_job_ids = {other_generation.get("job_id")} | {
+            item.get("job_id")
+            for item in other_generation.get("attempts", [])
+            if isinstance(item, dict)
+        }
+        if job_id in other_job_ids:
+            raise StateError(f"provider job id is already bound to shot {other.get('id')}")
+    generation = shot["generation"]
+    existing = generation.get("job_id")
+    if existing and existing != job_id:
+        raise StateError(f"shot is already bound to a different provider job id: {existing}")
+    attempt = _active_attempt(shot)
+    if attempt is None:
+        attempts = generation.setdefault("attempts", [])
+        attempt_id = f"ATTEMPT_{len(attempts) + 1:03d}"
+        attempt = {
+            "attempt_id": attempt_id,
+            "generation_version": generation.get("version", 1),
+            "execution_fingerprint": (generation.get("execution") or {}).get("fingerprint"),
+            "provider": provider
+            or generation.get("model")
+            or (shot.get("shot_grammar", {}).get("provider_binding") or {}).get("provider"),
+            "submission_surface": submission_surface or "external",
+            "mode": (generation.get("execution") or {}).get("mode"),
+            "match_signature": None,
+            "started_at": utc_now(),
+            "submitted_at": utc_now(),
+            "last_checked_at": None,
+            "resolved_at": None,
+            "job_id": job_id,
+            "remote_status": "SUBMITTED",
+            "raw_remote_status": None,
+            "resolution": "PENDING",
+            "ambiguity_reason": None,
+            "account_credits_before": None,
+            "account_credits_after": None,
+            "cost_uncertainty_acknowledged": False,
+            "result_available": False,
+            "result_path": result_path,
+            "review": None,
+        }
+        attempts.append(attempt)
+        generation["active_attempt_id"] = attempt_id
+    elif attempt.get("job_id") not in {None, job_id}:
+        raise StateError("active attempt is already bound to a different provider job id")
+    if provider:
+        existing_provider = attempt.get("provider")
+        if existing_provider not in {None, provider}:
+            raise StateError(f"attempt provider conflicts with recorded provider: {existing_provider}")
+        attempt["provider"] = provider
+    if submission_surface:
+        existing_surface = attempt.get("submission_surface")
+        if existing_surface not in {None, "unknown", submission_surface}:
+            raise StateError(f"attempt submission surface conflicts with recorded surface: {existing_surface}")
+        attempt["submission_surface"] = submission_surface
+    attempt.update(
+        {
+            "job_id": job_id,
+            "submitted_at": attempt.get("submitted_at") or utc_now(),
+            "remote_status": "SUBMITTED" if attempt.get("remote_status") == "UNKNOWN" else attempt.get("remote_status"),
+            "ambiguity_reason": None,
+            "result_path": result_path if result_path is not None else attempt.get("result_path"),
+        }
+    )
+    generation.update({"job_id": job_id, "result_path": result_path})
+    if generation.get("status") in {"SUBMITTING", "SUBMISSION_AMBIGUOUS", "FAILED", "READY"}:
+        generation["status"] = "SUBMITTED"
     shot["updated_at"] = utc_now()
     shots["updated_at"] = utc_now()
     atomic_write_json(path, shots)
-    append_history(root, "job_recorded", actor, "shot", shot_id, {"job_id": job_id})
+    append_history(
+        root,
+        "job_recorded",
+        actor,
+        "shot",
+        shot_id,
+        {
+            "job_id": job_id,
+            "attempt_id": attempt.get("attempt_id"),
+            "provider": attempt.get("provider"),
+            "submission_surface": attempt.get("submission_surface"),
+            "result_path": result_path,
+        },
+    )
+    sync_dashboard(root)
+
+
+def annotate_reconciled_job(
+    root: str | Path,
+    shot_id: str,
+    job_id: str,
+    actor: str,
+    *,
+    provider: str | None = None,
+    submission_surface: str | None = None,
+    result_path: str | None = None,
+) -> None:
+    """Fill provenance for a recorded job without reopening or duplicating its attempt."""
+    if submission_surface is not None and submission_surface not in SUBMISSION_SURFACES - {"unknown"}:
+        raise StateError(f"invalid submission surface: {submission_surface}")
+    path = data_dir(root) / "shots.json"
+    shots = read_json(path)
+    shot = _find(shots.get("items", []), shot_id, "shot")
+    generation = shot.get("generation") or {}
+    if generation.get("job_id") != job_id:
+        raise StateError("shot is not bound to the requested provider job id")
+    attempt = next(
+        (item for item in generation.get("attempts", []) if item.get("job_id") == job_id),
+        None,
+    )
+    if attempt is None:
+        raise StateError("recorded provider job has no matching attempt")
+    if provider:
+        existing_provider = attempt.get("provider")
+        if existing_provider not in {None, provider}:
+            raise StateError(f"attempt provider conflicts with recorded provider: {existing_provider}")
+        attempt["provider"] = provider
+    if submission_surface:
+        existing_surface = attempt.get("submission_surface")
+        if existing_surface not in {None, "unknown", submission_surface}:
+            raise StateError(f"attempt submission surface conflicts with recorded surface: {existing_surface}")
+        attempt["submission_surface"] = submission_surface
+    if result_path is not None:
+        attempt["result_path"] = result_path
+        generation["result_path"] = result_path
+    shot["updated_at"] = utc_now()
+    shots["updated_at"] = utc_now()
+    atomic_write_json(path, shots)
+    append_history(
+        root,
+        "reconciled_job_annotated",
+        actor,
+        "shot",
+        shot_id,
+        {
+            "job_id": job_id,
+            "provider": attempt.get("provider"),
+            "submission_surface": attempt.get("submission_surface"),
+            "result_path": result_path,
+        },
+    )
+    sync_dashboard(root)
+
+
+def record_provider_observation(
+    root: str | Path,
+    shot_id: str,
+    normalized_status: str,
+    actor: str,
+    *,
+    raw_status: str | None,
+    result_available: bool,
+    account_credits_after: float | None = None,
+) -> None:
+    allowed = {"SUBMITTED", "QUEUED", "RUNNING", "REMOTE_UNKNOWN", "PROVIDER_COMPLETED", "FAILED"}
+    if normalized_status not in allowed:
+        raise StateError(f"invalid provider observation status: {normalized_status}")
+    path = data_dir(root) / "shots.json"
+    shots = read_json(path)
+    shot = _find(shots.get("items", []), shot_id, "shot")
+    attempt = _active_attempt(shot)
+    if attempt is None or not attempt.get("job_id"):
+        raise StateError("provider observation requires an active attempt with a job id")
+    now = utc_now()
+    attempt.update(
+        {
+            "remote_status": normalized_status.removeprefix("PROVIDER_"),
+            "raw_remote_status": raw_status,
+            "last_checked_at": now,
+            "account_credits_after": account_credits_after,
+            "result_available": bool(result_available),
+        }
+    )
+    generation = shot["generation"]
+    if normalized_status == "FAILED":
+        attempt.update({"resolution": "REMOTE_FAILED", "resolved_at": now})
+        generation["active_attempt_id"] = None
+        generation["status"] = "FAILED"
+        generation["retry_count"] = int(generation.get("retry_count", 0)) + 1
+    elif generation.get("status") not in {"GENERATED", "FINAL_COMPLETE"}:
+        generation["status"] = normalized_status
+    shot["updated_at"] = now
+    shots["updated_at"] = now
+    atomic_write_json(path, shots)
+    append_history(
+        root,
+        "provider_observation_recorded",
+        actor,
+        "shot",
+        shot_id,
+        {
+            "attempt_id": attempt.get("attempt_id"),
+            "job_id": attempt.get("job_id"),
+            "status": normalized_status,
+            "raw_status": raw_status,
+            "result_available": bool(result_available),
+        },
+    )
+    sync_dashboard(root)
+
+
+def finalize_provider_completion(root: str | Path, shot_id: str, actor: str) -> None:
+    path = data_dir(root) / "shots.json"
+    shots = read_json(path)
+    shot = _find(shots.get("items", []), shot_id, "shot")
+    attempt = _active_attempt(shot)
+    if attempt is None or attempt.get("remote_status") != "COMPLETED" or not attempt.get("job_id"):
+        raise StateError("provider completion evidence is required before local generation completion")
+    now = utc_now()
+    attempt.update({"resolution": "RECORDED", "resolved_at": now})
+    shot["generation"].update(
+        {
+            "status": "GENERATED",
+            "active_attempt_id": None,
+            "job_id": attempt.get("job_id"),
+        }
+    )
+    shot["updated_at"] = now
+    shots["updated_at"] = now
+    atomic_write_json(path, shots)
+    append_history(
+        root,
+        "provider_completion_finalized",
+        actor,
+        "shot",
+        shot_id,
+        {"attempt_id": attempt.get("attempt_id"), "job_id": attempt.get("job_id")},
+    )
+    sync_dashboard(root)
+
+
+def resolve_submission_ambiguity(
+    root: str | Path,
+    shot_id: str,
+    resolution: str,
+    actor: str,
+    reason: str,
+) -> None:
+    if resolution not in {"NOT_SUBMITTED", "ABANDONED_RISK_ACCEPTED"}:
+        raise StateError("ambiguity resolution must be NOT_SUBMITTED or ABANDONED_RISK_ACCEPTED")
+    if resolution == "ABANDONED_RISK_ACCEPTED" and actor != "user":
+        raise StateError("only the user may accept the duplicate-submission risk")
+    if not reason.strip():
+        raise StateError("ambiguity resolution requires a reason")
+    path = data_dir(root) / "shots.json"
+    shots = read_json(path)
+    shot = _find(shots.get("items", []), shot_id, "shot")
+    attempt = _active_attempt(shot)
+    if attempt is None or attempt.get("resolution") != "PENDING":
+        raise StateError("shot has no unresolved submission attempt")
+    if attempt.get("job_id"):
+        raise StateError("a known provider job must be reconciled, not abandoned as unknown")
+    now = utc_now()
+    attempt.update(
+        {
+            "resolution": resolution,
+            "resolved_at": now,
+            "ambiguity_reason": reason,
+        }
+    )
+    generation = shot["generation"]
+    generation["active_attempt_id"] = None
+    generation["status"] = "FAILED"
+    generation["retry_count"] = int(generation.get("retry_count", 0)) + 1
+    shot["updated_at"] = now
+    shots["updated_at"] = now
+    atomic_write_json(path, shots)
+    append_history(
+        root,
+        "submission_ambiguity_resolved",
+        actor,
+        "shot",
+        shot_id,
+        {"attempt_id": attempt.get("attempt_id"), "resolution": resolution, "reason": reason},
+    )
     sync_dashboard(root)
 
 
@@ -1359,13 +2065,25 @@ def record_actual_cost(
     }
     actual = costs.setdefault("actual", {})
     transactions = actual.setdefault("transactions", [])
-    projected = round(sum(float(item.get("credits", 0)) for item in transactions) + float(credits), 6)
+    existing = next(
+        (item for item in transactions if job_id and item.get("job_id") == job_id),
+        None,
+    )
+    if existing is not None and (
+        existing.get("entity_id") != entity_id or float(existing.get("credits", 0)) != float(credits)
+    ):
+        raise StateError("provider job already has a conflicting actual-cost transaction")
+    projected = round(
+        sum(float(item.get("credits", 0)) for item in transactions)
+        + (0.0 if existing is not None else float(credits)),
+        6,
+    )
     project = read_json(data_dir(root) / "project.json")
     ceiling = project.get("cost_approval", {}).get("max_credits")
-    if ceiling is not None and projected > float(ceiling):
-        raise StateError("recorded cost would exceed the approved ceiling")
-    transactions.append(transaction)
+    if existing is None:
+        transactions.append(transaction)
     actual["credits"] = projected
+    actual["ceiling_breach"] = ceiling is not None and projected > float(ceiling)
     pending = actual.setdefault("pending", [])
     actual["pending"] = [
         item
@@ -1378,7 +2096,8 @@ def record_actual_cost(
     actual["reconciliation_required"] = bool(actual["pending"])
     costs["updated_at"] = utc_now()
     atomic_write_json(costs_path, costs)
-    append_history(root, "actual_cost_recorded", actor, "cost", entity_id, transaction)
+    if existing is None:
+        append_history(root, "actual_cost_recorded", actor, "cost", entity_id, transaction)
     sync_dashboard(root)
 
 
@@ -1476,6 +2195,8 @@ def boundary_plan_errors(shot: dict[str, Any]) -> list[str]:
     role = plan.get("planned_keyframe_role")
     if role not in KEYFRAME_ROLES:
         return ["planned keyframe role is invalid"]
+    if plan.get("end_keyframe_role", "none") not in {"end_image", "none"}:
+        return ["end keyframe role is invalid"]
     errors: list[str] = []
     if not plan.get("reason"):
         errors.append("boundary director reason is missing")
@@ -1483,7 +2204,7 @@ def boundary_plan_errors(shot: dict[str, Any]) -> list[str]:
         errors.append("planned keyframe must not ride the video call as an undocumented image_reference")
     references = shot.get("references") or {}
     inherit = plan.get("inherit_previous_last_frame")
-    if strategy in {"continuous_match", "motivated_transition"}:
+    if strategy == "continuous_match" or (strategy == "motivated_transition" and inherit is True):
         if inherit is not True:
             errors.append("continuous boundary must inherit the previous last frame")
         if not plan.get("previous_shot_id"):
@@ -1494,13 +2215,19 @@ def boundary_plan_errors(shot: dict[str, Any]) -> list[str]:
         elif references.get("start") != previous_frame:
             errors.append("previous boundary frame must be transported as start_image")
     elif inherit is not False:
-        errors.append("editorial cut or scene reset must not inherit the previous last frame")
+        errors.append("non-continuous boundary must explicitly avoid previous-frame inheritance")
     if strategy == "motivated_transition":
-        if plan.get("planned_keyframe"):
-            if role != "end_image" or references.get("end") != plan.get("planned_keyframe"):
+        end_keyframe = plan.get("end_keyframe")
+        end_role = plan.get("end_keyframe_role")
+        if end_keyframe:
+            if end_role != "end_image" or references.get("end") != end_keyframe:
                 errors.append("motivated transition end keyframe is not transported as end_image")
-        elif role != "none" or references.get("end"):
+        elif end_role != "none" or references.get("end"):
             errors.append("prompt-only motivated transition must not carry an end keyframe")
+        if inherit is False and (
+            not plan.get("planned_keyframe") or references.get("start") != plan.get("planned_keyframe")
+        ):
+            errors.append("non-inherited motivated transition requires its composed keyframe as start_image")
     if strategy in {"editorial_cut", "scene_reset"}:
         if not plan.get("planned_keyframe") or references.get("start") != plan.get("planned_keyframe"):
             errors.append("cut/reset requires its composed planned keyframe as the start_image")
@@ -1571,7 +2298,7 @@ def start_image_review_errors(shot: dict[str, Any]) -> list[str]:
     if status == "NOT_APPLICABLE" and generation_status in {"GENERATED", "FINAL_COMPLETE"}:
         return []
     if status != "PASSED":
-        return ["start image has not passed the v7 preparation review"]
+        return ["start image has not passed the required preparation review"]
     if review.get("start_image_path") != (shot.get("references") or {}).get("start"):
         return ["start image preparation review does not match the current references.start"]
     assessment = review.get("assessment") or {}
@@ -1587,7 +2314,12 @@ def audio_plan_errors(shot: dict[str, Any]) -> list[str]:
     route = audio.get("route")
     if route not in AUDIO_ROUTES:
         return ["audio route is undecided or invalid"]
-    audio_mode = (shot.get("seedance_plan") or {}).get("audio_mode")
+    provider = (shot.get("shot_grammar", {}).get("provider_binding") or {}).get("provider")
+    is_cinema35 = provider == "cinematic_studio_video_3_5"
+    provider_plan = (
+        (shot.get("cinema35_plan") or {}) if is_cinema35 else (shot.get("seedance_plan") or {})
+    )
+    audio_mode = provider_plan.get("audio_mode")
     errors: list[str] = []
     if route in {"NO_DIALOGUE_POST", "OFFSCREEN_NARRATION"} and audio_mode != "post_only":
         errors.append("non-visible speech routes must generate picture with audio_mode=post_only")
@@ -1616,17 +2348,17 @@ def audio_plan_errors(shot: dict[str, Any]) -> list[str]:
         if (shot.get("references") or {}).get("audios"):
             errors.append("no-dialogue native-sound route must not carry audio_references")
         if audio.get("generated_track_policy") != "PRESERVE":
-            errors.append("no-dialogue native-sound route must preserve the Seedance native track")
+            errors.append("no-dialogue native-sound route must preserve the provider native track")
         if audio.get("final_mix_required") is not False:
             errors.append("no-dialogue native-sound route must not require a creative external mix")
         errors.extend(
             "no-dialogue native sound " + message
             for message in cinematography.validate_sound_design(
-                (shot.get("seedance_plan") or {}).get("sound_design"), require_complete=True
+                provider_plan.get("sound_design"), require_complete=True
             )
         )
         if not cinematography.is_no_dialogue_brief(
-            ((shot.get("seedance_plan") or {}).get("sound_design") or {}).get("dialogue")
+            (provider_plan.get("sound_design") or {}).get("dialogue")
         ):
             errors.append(
                 "no-dialogue native sound requires sound_design.dialogue to explicitly say none or no dialogue"
@@ -1634,6 +2366,10 @@ def audio_plan_errors(shot: dict[str, Any]) -> list[str]:
     if route == "INTENTIONAL_SILENCE" and audio.get("final_mix_required") is not False:
         errors.append("intentional silence must not require a final external mix")
     if route == "VISIBLE_DIALOGUE_V3_REFERENCE_NATIVE_AUDIO":
+        if is_cinema35:
+            errors.append(
+                "visible-dialogue V3 conditioning is production-proven only on the Seedance route; Cinema 3.5 requires an explicit A/B before adoption"
+            )
         if audio_mode != "audio_reference":
             errors.append("visible dialogue must use the locked ElevenLabs reference as audio_reference")
         if audio.get("voice_provider") != "elevenlabs" or audio.get("voice_model") != "eleven_v3":
@@ -1722,23 +2458,24 @@ def sequential_adaptation_errors(state: dict[str, dict[str, Any]], shot: dict[st
     if previous.get("qc", {}).get("user_review") != "PASSED":
         errors.append("previous sequential shot lacks user acceptance")
     previous_analysis = previous.get("boundary_analysis") or {}
-    if previous_analysis.get("status") != "COMPLETE":
-        errors.append("previous sequential shot lacks boundary analysis")
-    if (previous.get("start_frame_qc") or {}).get("status") != "PASSED":
-        errors.append("previous sequential shot lacks passed start-frame QC")
     if story.get("based_on_previous_shot_id") != previous_id:
         errors.append("adaptive plan is not based on the immediate previous shot")
-    if story.get("based_on_boundary_analysis_id") != previous_analysis.get("analysis_id"):
-        errors.append("adaptive plan is not bound to the previous boundary analysis")
     if provenance.get("created_after_shot_id") != previous_id:
         errors.append("next start image was not created or inherited just in time after the previous shot")
     if not provenance.get("created_at"):
         errors.append("next start image has no JIT provenance timestamp")
-    strategy = (shot.get("boundary") or {}).get("strategy")
-    if strategy in {"continuous_match", "motivated_transition"}:
+    boundary = shot.get("boundary") or {}
+    strategy = boundary.get("strategy")
+    if boundary.get("inherit_previous_last_frame") is True:
+        if previous_analysis.get("status") != "COMPLETE":
+            errors.append("inherited boundary lacks previous boundary analysis")
+        if (previous.get("start_frame_qc") or {}).get("status") != "PASSED":
+            errors.append("inherited boundary lacks passed previous start-frame QC")
+        if story.get("based_on_boundary_analysis_id") != previous_analysis.get("analysis_id"):
+            errors.append("inherited adaptive plan is not bound to the previous boundary analysis")
         if (shot.get("references") or {}).get("start") != previous_analysis.get("frame_path"):
             errors.append("chained start image must equal the accepted previous boundary analysis frame")
-    elif provenance.get("mode") != "jit_composition":
+    elif strategy in {"motivated_transition", "editorial_cut", "scene_reset"} and provenance.get("mode") != "jit_composition":
         errors.append("cut/reset after the first shot must use a just-in-time composed start image")
     return errors
 
@@ -1746,26 +2483,34 @@ def sequential_adaptation_errors(state: dict[str, dict[str, Any]], shot: dict[st
 def shot_gate_errors(state: dict[str, dict[str, Any]], shot: dict[str, Any]) -> list[str]:
     errors: list[str] = []
     project = state["project"]
-    if project.get("requirements_lock", {}).get("status") != "LOCKED":
-        errors.append("requirements are not locked")
+    policy = project.get("production_policy") or default_production_policy()
+    profile = policy.get("approval_profile", "FULL")
+    if profile not in APPROVAL_PROFILES:
+        errors.append("production approval profile is invalid")
+        profile = "FULL"
     if project.get("cost_approval", {}).get("status") != "APPROVED":
         errors.append("cost ceiling is not approved")
-    if shot.get("approval_status") != "LOCKED_FOR_VIDEO":
-        errors.append("shot board is not locked for video")
-    assets = {item.get("id"): item for item in state["assets"].get("items", [])}
-    for asset_id in shot.get("required_asset_ids", []):
-        if assets.get(asset_id, {}).get("status") != "LOCKED_FOR_VIDEO":
-            errors.append(f"required asset is not locked: {asset_id}")
-    continuity = shot.get("continuity", {})
-    missing_context = [key for key, value in continuity.items() if not value]
-    if missing_context:
-        errors.append("continuity context missing: " + ", ".join(missing_context))
-    errors.extend(boundary_plan_errors(shot))
+    if profile == "FULL" and project.get("requirements_lock", {}).get("status") != "LOCKED":
+        errors.append("requirements are not locked")
+    if profile in {"TARGETED", "FULL"}:
+        if shot.get("approval_status") != "LOCKED_FOR_VIDEO":
+            errors.append("shot board is not locked for video")
+        assets = {item.get("id"): item for item in state["assets"].get("items", [])}
+        for asset_id in shot.get("required_asset_ids", []):
+            if assets.get(asset_id, {}).get("status") != "LOCKED_FOR_VIDEO":
+                errors.append(f"required asset is not locked: {asset_id}")
+        errors.extend(boundary_plan_errors(shot))
+    if profile == "FULL":
+        continuity = shot.get("continuity", {})
+        missing_context = [key for key, value in continuity.items() if not value]
+        if missing_context:
+            errors.append("continuity context missing: " + ", ".join(missing_context))
     errors.extend(start_image_policy_errors(shot))
     errors.extend(start_image_review_errors(shot))
     errors.extend(audio_plan_errors(shot))
-    errors.extend(story_contract_errors(state, shot))
-    errors.extend(sequential_adaptation_errors(state, shot))
+    if profile == "FULL":
+        errors.extend(story_contract_errors(state, shot))
+        errors.extend(sequential_adaptation_errors(state, shot))
     binding = shot.get("shot_grammar", {}).get("provider_binding", {})
     if binding.get("provider") in {"seedance_2_0", "seedance_2_0_mini"}:
         plan = shot.get("seedance_plan") or {}
@@ -1775,6 +2520,14 @@ def shot_gate_errors(state: dict[str, dict[str, Any]], shot: dict[str, Any]) -> 
             errors.append("Seedance aspect ratio does not match locked project requirements")
         if required_resolution and plan.get("resolution") != required_resolution:
             errors.append("Seedance resolution does not match locked project requirements")
+    elif binding.get("provider") == "cinematic_studio_video_3_5":
+        plan = shot.get("cinema35_plan") or {}
+        required_aspect = project.get("project", {}).get("aspect_ratio")
+        required_resolution = project.get("project", {}).get("resolution")
+        if required_aspect and plan.get("aspect_ratio") != required_aspect:
+            errors.append("Cinema 3.5 aspect ratio does not match locked project requirements")
+        if required_resolution and plan.get("resolution") != required_resolution:
+            errors.append("Cinema 3.5 resolution does not match locked project requirements")
     grammar_errors, _ = cinematography.validate_grammar(
         shot.get("shot_grammar", {}), require_complete=True, shot_duration=shot.get("duration_seconds")
     )
@@ -1789,16 +2542,30 @@ def transition_generation(root: str | Path, shot_id: str, target: str, actor: st
     state = load_all(root)
     shot = _find(state["shots"].get("items", []), shot_id, "shot")
     current = shot["generation"]["status"]
+    if target == "READY" and unresolved_submission(shot):
+        raise StateError("unresolved provider submission must be reconciled before retry")
     if target not in GENERATION_TRANSITIONS[current]:
         raise StateError(f"invalid generation transition: {current} -> {target}")
-    if target in {"QUEUED", "GENERATING", "GENERATED"}:
+    if target == "SUBMITTING":
         gates = shot_gate_errors(state, shot)
         if gates:
             raise StateError("generation gate failed: " + "; ".join(gates))
+        raise StateError("SUBMITTING may only be entered by the guarded paid runner")
+    if target == "FAILED" and unresolved_submission(shot):
+        raise StateError("an unresolved provider attempt must be reconciled or explicitly resolved, not marked failed")
+    if target in {"SUBMITTED", "QUEUED", "RUNNING", "REMOTE_UNKNOWN", "PROVIDER_COMPLETED"}:
+        raise StateError(f"{target} may only be recorded through provider reconciliation")
+    if target == "GENERATED":
+        attempt = _active_attempt(shot)
+        if attempt is None or attempt.get("remote_status") != "COMPLETED":
+            raise StateError("GENERATED requires recorded provider completion evidence")
+        attempt.update({"resolution": "RECORDED", "resolved_at": utc_now()})
+        shot["generation"]["active_attempt_id"] = None
     if target == "FINAL_COMPLETE":
         if (shot.get("start_frame_qc") or {}).get("status") != "PASSED":
             raise StateError("final gate failed; start-frame QC is not passed")
-        if (shot.get("boundary_analysis") or {}).get("status") != "COMPLETE":
+        approval_profile = ((state["project"].get("production_policy") or {}).get("approval_profile") or "FULL")
+        if approval_profile == "FULL" and (shot.get("boundary_analysis") or {}).get("status") != "COMPLETE":
             raise StateError("final gate failed; boundary analysis is incomplete")
         required_qc = ("technical", "transcript", "lip_sync", "visual", "continuity", "cinematography", "user_review")
         bad = [key for key in required_qc if shot.get("qc", {}).get(key) not in {"PASSED", "NOT_APPLICABLE"}]
@@ -1843,6 +2610,13 @@ def validate(root: str | Path) -> list[str]:
         ids = [item.get("id") for item in state[collection].get("items", [])]
         if len(ids) != len(set(ids)):
             errors.append(f"{collection}: duplicate ids")
+    policy = state["project"].get("production_policy") or {}
+    if policy.get("mode") not in PRODUCTION_MODES:
+        errors.append("project: invalid production mode")
+    if policy.get("approval_profile") not in APPROVAL_PROFILES:
+        errors.append("project: invalid approval profile")
+    if policy.get("mode") == "OFFICIAL_WORKFLOW" and policy.get("official_workflow") not in {"marketing_studio", "video_explainer"}:
+        errors.append("project: official workflow route is incomplete")
     if state["project"].get("requirements_lock", {}).get("status") == "LOCKED":
         for field in REQUIRED_REQUIREMENTS:
             if state["requirements"]["fields"].get(field, {}).get("status") != "CONFIRMED":
@@ -1861,8 +2635,34 @@ def validate(root: str | Path) -> list[str]:
             errors.append(f"shot {shot.get('id')}: locked without approval")
         if shot.get("generation", {}).get("status") not in GENERATION_STATES:
             errors.append(f"shot {shot.get('id')}: invalid generation status")
-        if shot.get("generation", {}).get("status") in {"QUEUED", "GENERATING", "GENERATED", "FINAL_COMPLETE"}:
+        if shot.get("generation", {}).get("status") == "READY":
             errors.extend(f"shot {shot.get('id')}: {message}" for message in shot_gate_errors(state, shot))
+        active_id = shot.get("generation", {}).get("active_attempt_id")
+        attempts = shot.get("generation", {}).get("attempts")
+        generation_status = shot.get("generation", {}).get("status")
+        if not isinstance(attempts, list):
+            errors.append(f"shot {shot.get('id')}: generation attempts must be an array")
+        else:
+            if active_id and not any(item.get("attempt_id") == active_id for item in attempts if isinstance(item, dict)):
+                errors.append(f"shot {shot.get('id')}: active generation attempt does not exist")
+            for attempt in attempts:
+                if isinstance(attempt, dict) and attempt.get("submission_surface") not in SUBMISSION_SURFACES:
+                    errors.append(
+                        f"shot {shot.get('id')}: invalid submission surface for {attempt.get('attempt_id')}"
+                    )
+        if generation_status in {"SUBMITTING", "SUBMISSION_AMBIGUOUS"} and not active_id:
+            errors.append(f"shot {shot.get('id')}: {generation_status} requires an active submission attempt")
+        active_statuses = {
+            "SUBMITTING", "SUBMISSION_AMBIGUOUS", "SUBMITTED", "QUEUED",
+            "RUNNING", "REMOTE_UNKNOWN", "PROVIDER_COMPLETED",
+        }
+        if active_id and generation_status not in active_statuses:
+            errors.append(f"shot {shot.get('id')}: active submission attempt is inconsistent with {generation_status}")
+        if generation_status in {"SUBMITTED", "QUEUED", "RUNNING", "REMOTE_UNKNOWN", "PROVIDER_COMPLETED"}:
+            if not active_id:
+                errors.append(f"shot {shot.get('id')}: {generation_status} requires an active submission attempt")
+            if not shot.get("generation", {}).get("job_id"):
+                errors.append(f"shot {shot.get('id')}: {generation_status} requires a provider job id")
         if "shot_grammar" not in shot:
             errors.append(f"shot {shot.get('id')}: missing shot_grammar")
         else:
@@ -1877,9 +2677,10 @@ def validate(root: str | Path) -> list[str]:
                 errors.append(f"shot {shot.get('id')}: invalid QC state for {key}")
     approved = state["project"].get("cost_approval", {})
     actual = float(state["costs"].get("actual", {}).get("credits", 0) or 0)
-    if approved.get("status") == "APPROVED" and approved.get("max_credits") is not None:
-        if actual > float(approved["max_credits"]):
-            errors.append("actual credits exceed the approved ceiling")
+    ceiling = approved.get("max_credits")
+    expected_breach = ceiling is not None and actual > float(ceiling)
+    if state["costs"].get("actual", {}).get("ceiling_breach") is not expected_breach:
+        errors.append("actual credit ceiling-breach flag is inconsistent")
     return errors
 
 
@@ -1902,16 +2703,28 @@ def aggregate(root: str | Path) -> dict[str, Any]:
         )[0]
     )
     blockers: list[str] = []
-    if state["project"].get("requirements_lock", {}).get("status") != "LOCKED":
+    policy = state["project"].get("production_policy") or default_production_policy()
+    if policy.get("approval_profile") == "FULL" and state["project"].get("requirements_lock", {}).get("status") != "LOCKED":
         blockers.append("요구사항 승인 필요")
     if state["project"].get("cost_approval", {}).get("status") != "APPROVED":
         blockers.append("비용 상한 승인 필요")
     if state["costs"].get("actual", {}).get("reconciliation_required"):
-        blockers.append("실제 크레딧 사용량 대사 필요")
+        blockers.append("실제 크레딧 사용량 대사 필요 (새 제출은 명시적 위험 승인으로 계속 가능)")
+    if state["costs"].get("actual", {}).get("ceiling_breach"):
+        blockers.append("실제 사용량이 승인 상한을 초과함 (기록은 보존, 새 제출은 중지)")
+    for shot in shots:
+        generation = shot.get("generation", {})
+        status = generation.get("status")
+        if status == "SUBMISSION_AMBIGUOUS":
+            blockers.append(f"{shot.get('id')}: 제출 결과 불명확 — provider history 대사 또는 사용자 위험 승인 필요")
+        elif status == "SUBMITTING":
+            blockers.append(f"{shot.get('id')}: 제출 도중 중단 가능성 — provider history 대사 필요")
+        elif status == "REMOTE_UNKNOWN":
+            blockers.append(f"{shot.get('id')}: 원격 잡 상태 관측 실패 — 같은 job ID로 재조회 필요")
     blockers.extend(
         f"{shot.get('id')}: {message}"
         for shot in shots
-        if shot.get("generation", {}).get("status") in {"READY", "QUEUED"}
+        if shot.get("generation", {}).get("status") == "READY"
         for message in shot_gate_errors(state, shot)
     )
     total = len(shots)

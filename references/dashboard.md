@@ -12,8 +12,10 @@ Split state files:
 - `requirements.json`: field value, state, source, confirmer.
 - `assets.json`: versioned images, characters, products, props, locations.
 - `scenes.json`: ordered scene plan.
-- `shots.json`: board, structured cinematography grammar, continuity, generation, audio, and QC state.
-- `costs.json`: reference-only arithmetic and actual-credit ledger.
+- `shots.json`: board, structured cinematography grammar, continuity, generation,
+  provider-attempt observations, audio, and QC state.
+- `costs.json`: reference-only arithmetic, actual-credit ledger, pending
+  reconciliation, and ceiling-breach truth.
 - `history.json`: append-only mutation events.
 
 Atomic writes preserve a one-generation `.bak` file for recovery. The dashboard
@@ -23,12 +25,16 @@ does not contain credentials or OAuth state.
 
 - Project identity and final completion gauge.
 - Total/grammar-ready/generated/QC/final shot metrics.
-- Approval queue for requirements, project ceiling, assets, and shot boards.
-- Active interlocks and blockers.
+- Approval queue appropriate to the selected profile: requirements only in
+  `FULL`, plus the project ceiling and applicable assets/shot boards.
+- Active interlocks and recoverable blockers, including ambiguous submissions
+  and known jobs whose remote status is temporarily unknown.
 - Shot table with board, grammar and generation state, model, QC count, version.
-- Per-shot grammar cards with intent, core camera choices, rationale, provider and support level.
+- Per-shot grammar cards with intent, core camera choices, rationale, provider,
+  support level, and the five compact director-intelligence summaries.
 - Asset version/lock/OCR state.
-- Reference-only arithmetic coverage, actual credits, approved project ceiling.
+- Reference-only arithmetic coverage, actual credits, pending reconciliation,
+  approved project ceiling, and independent ceiling-breach status.
 - Reverse chronological history.
 
 ## Running

@@ -6,8 +6,8 @@ Turn a video idea into a controlled, reviewable Higgsfield production—not a pi
 of disconnected generation attempts.
 
 Sonol Higgsfield is an agent skill for Codex CLI, Claude Code, and compatible
-Agent Skills hosts. It gives your agent a production workflow for multi-shot
-films, ads, stories, campaigns, and narrated videos: requirements, storyboard,
+Agent Skills hosts. It routes small work to the lightest official path and gives
+your agent a managed production workflow for multi-job films, stories, and campaigns: requirements, storyboard,
 cinematography, references, budget approval, generation, continuity checks,
 audio routing, selective repair, finishing, and delivery.
 
@@ -79,7 +79,30 @@ For the complete production workflow, also provide:
   new visible-dialogue reference or external narration; not required when an
   authorized finished reference file is already supplied
 - Optional Higgsfield MCP access; the skill treats the live CLI schema as the
-  canonical execution contract and does not require MCP
+  canonical discovery and provider-truth contract and does not require MCP
+
+### Browser execution and login
+
+Cinema Studio controls that are web-only, or a confirmed CLI failure before job
+creation, can use a visible Higgsfield browser session. The user must complete
+login, 2FA, captcha, passkey, and consent directly in that browser; the agent
+must never request or inspect passwords, codes, cookies, or tokens. A dedicated
+profile can preserve the session on that computer, but a new computer requires
+the user to sign in again.
+
+Preferred control is the host's native computer-use/browser tool, followed by
+Playwright/browser MCP. The bundled loopback-CDP fallback supports Windows
+Claude Code, WSL controlling Windows Chrome or Edge, macOS, and desktop Linux:
+
+```bash
+python3 scripts/web_ui_runtime.py doctor
+python3 scripts/web_ui_runtime.py launch
+```
+
+The fallback requires Python 3.10+, Chrome/Edge/Chromium, and Node.js 22+; it
+binds only to `127.0.0.1` and uses an isolated profile. In Cinema Studio 3.5,
+selecting an image initially makes it a `Reference`; explicitly change it to
+`Start Frame` and verify the visible `Start` badge before one approved paid click.
 
 Official setup references:
 
@@ -88,6 +111,15 @@ Official setup references:
 - [Skills CLI](https://github.com/vercel-labs/skills)
 
 ## Why use it?
+
+### Use only as much production system as the job needs
+
+The router chooses a quick official clip, a native Seedance multi-shot clip, a
+controlled precision shot, a serial Sonol production, or an official dedicated
+workflow. Marketing Studio remains first choice for ads and the official video
+explainer remains first choice for explainers. Approval depth is `LIGHT`,
+`TARGETED`, or `FULL`; the full interview and board are reserved for expensive,
+multi-job, or long productions.
 
 ### Make a film, not isolated clips
 
@@ -111,32 +143,84 @@ calls or build three quote scenarios. When matching actual jobs exist, it shows
 clearly labeled reference arithmetic from observed credits per second; otherwise
 it says the estimate is unavailable. Silence never counts as approval.
 
-### Keep Seedance 2.0 disciplined
+### Route Cinema Studio 3.5 and Seedance per shot
 
-The default is one controlled action and one primary camera movement per short
-prototype. Experimental timecoded multi-shot generation is available only when
-you accept whole-clip regeneration risk.
+There is no universal serious-video default. Cinema Studio 3.5 is preferred when
+camera character or genre, lighting, and grade are load-bearing; its broad
+camera-style, light, color, and genre axes compile to live structured fields.
+Exact dolly, pan, orbit, crane, lens, and aperture direction remains prompt-soft.
+Seedance remains preferred for the proven ElevenLabs V3 visible-dialogue route,
+continuity-first work, precise acting/object interaction, and native timecoded
+multi-shot. Balanced cases stay explicit A/B decisions.
+
+CLI 1.1.19 exposes the Cinema 3.5 contract under both model and workflow
+inspection, but generation runs through `generate create` with execution mode
+`model`; the skill prevents the unsupported `generate workflow` call. Prompts
+are minimum-sufficient rather than universally short, and the first frame
+defaults to match-then-release so camera motion can deliberately reframe.
+
+Before paying for a representative shot, inspect the current contract and ask
+the advisory router which provider best matches the shot's real load-bearing
+requirements:
+
+```bash
+python3 scripts/inspect_live_schema.py \
+  --model cinematic_studio_video_3_5 \
+  --output production/data/higgsfield-live-schema.json
+
+python3 scripts/director_intelligence.py route film 8 1 \
+  --camera-load-bearing \
+  --look-load-bearing \
+  --visual-priority expressive
+```
+
+The router explains its choice; it does not submit a job. For Cinema 3.5 the
+compiler binds the validated `camera_style`, `light_scheme`, `color_grading`,
+and `genre` fields, keeps exact movement/lens direction in the prompt, stores
+execution mode `model`, and then uses the guarded `generate create` path. When
+the choice is uncertain, run one representative A/B shot instead of switching
+the whole production by assumption.
 
 Each paid clip receives one start image. The first clip is composed up front;
-later clips either inherit an accepted boundary frame or compose a fresh frame
-just in time at a director-selected cut. Start-only is the default. One
+later clips inherit an accepted boundary frame only for true continuous action;
+other transitions compose a fresh frame just in time. Start-only is the default. One
 essential image reference is allowed only after a recorded failure and a
 one-variable A/B test; an end image is reserved for simple motivated transitions
 where exact arrival matters. FFmpeg persists eight candidates from the final
 0.5 seconds and recommends the least blurred, while the director may select a
-better narrative frame with a recorded reason. Schema v7 requires start-image
+better narrative frame with a recorded reason. Schema v11 requires start-image
 preflight for aspect, collage/labels, subject readability, first-action
 compatibility, and off-frame reveal risk. Optional SSIM/PSNR comparison is
-technical evidence, not automatic approval. First-frame QC, boundary analysis,
-locked story anchors, and previous user acceptance gate dependent generation.
+technical evidence, not automatic approval. Boundary analysis is required for
+inherited continuity, not for an editorial cut or scene reset. Full serial work
+also locks story anchors and prior user acceptance.
 The prompt exit state remains the default; an end image constrains only a simple
 exact-arrival transition and does not guarantee pixel-identical arrival.
+
+Schema v11 also records whether each provider attempt was submitted through
+CLI, web UI, MCP, or another external surface. The built-in director aids add
+five small advisory tools: visible acting cues,
+two camera alternatives, prompt lint, explainable shot-complexity scoring, and
+attempt-history failure diagnosis. They never silently invent action, split a
+shot, choose a camera, or spend credits.
 
 ### Resume long productions safely
 
 A local production directory and dashboard preserve requirements, versions,
 approvals, jobs, costs, QC state, and history. A later session can resume from
 the recorded state instead of reconstructing the project from chat memory.
+Paid submission is separated from queue waiting: the skill saves a durable
+attempt first, binds the job ID immediately, and observes the same job later.
+An interrupted create becomes an explicit ambiguous attempt instead of a blind
+retry; an interrupted wait keeps the known job ID. Provider completion and
+actual cost are always recorded even if local policies changed afterward.
+Missing credits remain reconcilable evidence, while above-ceiling actual usage
+is preserved and flagged rather than rejected from the ledger.
+Known CLI response envelopes include job objects, nested IDs, and the observed
+one-item UUID array. Moderation-terminal states such as `nsfw`, `moderated`, and
+`blocked` are recorded as provider failures rather than left in a ghost queue.
+Web-submitted jobs are reconciled by exact provider job ID and retain their
+`web_ui` submission surface, provider, downloaded result path, and actual cost.
 
 ### Repair only what failed
 
@@ -160,13 +244,13 @@ not a promise of sample-identical timing, timbre, or fidelity.
 
 ## Production flow
 
-1. Interview and lock the requirements.
-2. Create the persistent production state and dashboard.
-3. Write a timecoded script, scenes, assets, and shot plan.
+1. Route the intent to quick clip, native multi-shot, controlled shot, serial production, or an official dedicated workflow.
+2. For a managed route, choose `LIGHT`, `TARGETED`, or `FULL` approval depth and create state only when useful.
+3. Write the minimum necessary timecoded script, scenes, assets, and shot plan.
 4. Choose and validate film grammar for each shot.
 5. Inspect the live Higgsfield schema and credits, then approve a project ceiling.
 6. Approve animatics and references.
-7. Generate one bounded shot at a time.
+7. Generate one recoverable provider job at a time; a simple job may contain native multi-shot beats.
 8. Review continuity, audio, text, and technical quality immediately.
 9. Repair or selectively regenerate only the affected material.
 10. Assemble, finish, audit, and deliver the approved versions.

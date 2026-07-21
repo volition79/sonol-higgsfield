@@ -9,8 +9,9 @@ orchestration supplied by this skill.
 | Model/workflow discovery | Native live schema | Routing recommendations | Only if tools visible | Snapshot, drift detection, contract selection |
 | Exact generation cost | Native `generate cost`, intentionally unused | Provider guidance may recommend quotes | Unknown until schema visible | No live quote; recent-actual arithmetic plus project ceiling |
 | Image generation/reference inputs | Native models | Model routing | Likely, not assumed | Versioned asset plan, OCR and user lock |
-| Video generation/start/end/multi-reference | Native models including current Seedance contracts | Seedance routing | Likely, not assumed | Per-shot board, reference packing, job ledger |
-| Provider job wait/get/list | Native CLI | Execution guidance | Unknown until schema visible | Resume protocol and deterministic job IDs |
+| Video generation/start/end/multi-reference | Public CLI contract plus model-dependent transport; Cinema 3.5 media may fail before create | Seedance routing | Likely, not assumed | Per-shot board, reference packing, web recovery, job ledger |
+| Cinema 3.5 web start frame | Web UI explicitly supports Reference/Start Frame/End Frame roles | Official Academy documents start/end slots | Not assumed | User-login gate, computer-use/CDP bridge, visible preflight, CLI reconciliation |
+| Provider job create/wait/get/list | Native CLI; web create is separately available | Execution guidance | Unknown until schema visible | Durable attempts, immediate job-ID binding, web/external surface record, ambiguity-safe resume |
 | Native generated audio | Model-dependent | Routing guidance | Model-dependent | Complete no-dialogue/native-dialogue sound briefs, preservation gates, and explicit post-only exceptions |
 | Voice change | Live workflow exists | Route when requested | Unknown until schema visible | Not used as cleanup or stem separation |
 | TTS/audio/music | Native current audio models | Model routing | Unknown until schema visible | V3 dialogue conditioning reference, Seedance native production audio, separate narration/post-only routes |
@@ -19,7 +20,7 @@ orchestration supplied by this skill.
 | Script/timecode/shot decomposition | Not a provider contract | Partial workflow guidance | No evidence | Required durable scene/shot state |
 | Professional film grammar catalog | Camera controls and Cinema fields cover a subset | Prompt/routing examples | Exact tools must be visible | 15 axes, 148 source-linked techniques, aliases, failures and QC |
 | Intent-to-technique recommendation | Not a deterministic backend feature | Conversational guidance | No evidence | Deterministic 1–3 options with plain rationale and genre/platform priors |
-| Provider-specific camera compilation | Cinema 3.5 has structured style/light/grade; other models accept prompts/references | Model-specific guidance | Only after live schema | Native/reference/prompt/web/post support classifier and live-schema validation |
+| Provider-specific camera compilation | Cinema 3.5 has structured style/light/grade/genre; exact moves remain prompt-soft | Model-specific guidance | Only after live schema | Per-shot Seedance/Cinema routing, native-axis compiler, first-frame release policy, and live-schema validation |
 | Camera-technique compliance scoring | No deterministic guarantee | Manual inspection | No proven score | Conflict checks before generation and explicit cinematography QC after generation |
 | Asset and shot approvals | Not a provider contract | Conversational gates only | No evidence | Versioned state machines and user-only authority |
 | Cross-shot continuity | References help generation | Prompt/reference advice | No semantic automatic score confirmed | Four boundary strategies, persisted final-0.5s candidates, blur recommendation plus director override, first-frame evidence/QC, and sequential/JIT state gates |
@@ -38,26 +39,34 @@ orchestration supplied by this skill.
 - Durable split JSON production state with atomic writes and backup.
 - Four-state requirements interview and explicit user lock.
 - Versioned asset and shot approval machines.
-- Paid-generation interlocks, project ceiling preflight, and reconciliation.
+- Paid-generation interlocks at submission only, project ceiling preflight, and
+  post-submit provider-truth reconciliation.
 - Scene, shot, eight-field continuity, boundary, reference, audio, QC, and job ledgers.
 - Versioned `shot_grammar` state with approval invalidation and generation gate.
 - Source-linked 148-technique catalog, 13 genre and 7 platform profiles.
 - Deterministic recommender, provider compiler, conflict validator, live enum,
   freshness, and contract-fingerprint checks.
 - Recent matching actual-credit arithmetic with explicit `REFERENCE_ONLY` status.
-- Guarded paid shot runner with live balance, execution fingerprint,
-  re-fetched provider contract, prompt/native-param, ceiling, upload, strict
-  job-ID, and actual-cost reconciliation checks.
+- Guarded non-waiting paid submitter with durable attempts, live balance,
+  execution fingerprint, re-fetched provider contract, prompt/native-param,
+  ceiling, upload, flexible known-envelope job-ID parsing, and a separate
+  get/wait/history reconciliation path.
 - Redacted live CLI/model/workflow/account/MCP preflight.
+- Portable Windows/WSL/macOS/Linux browser doctor and isolated-profile CDP
+  fallback for user-authenticated web execution; no credential automation.
 - Korean/English OCR text-presence checker.
 - FFmpeg/ffprobe finishing helpers.
-- Schema v7 story-anchor, adaptive-analysis, start-image preparation,
+- Schema v10 adaptive approval profiles, per-shot Cinema/Seedance routing, story-anchor,
+  director-intelligence summaries, adaptive-analysis, start-image preparation,
   optional SSIM/PSNR first-frame evidence, director boundary selection, JIT provenance,
   compact native sound brief, generated-track policy, and recorded-reference
   SHA-256 gates.
 - Responsive local dashboard with random token and stale-version protection.
 - Dashboard grammar readiness, rationale, provider, and support-level views.
 - Unit, CLI, HTTP, policy, state persistence, and helper tests.
+- Incident fixtures for interrupted create/wait, unknown provider status,
+  ambiguous history matching, post-submit gate drift, omitted credits, and
+  above-ceiling actual-cost truth.
 
 ### Implemented as live provider routing
 
@@ -79,8 +88,9 @@ orchestration supplied by this skill.
 
 ## Feasibility conclusion
 
-The production workflow is feasible with the CLI as the canonical provider
-surface and this skill as the local orchestration layer. There is no structural
+The production workflow is feasible with the CLI as the canonical discovery
+and provider-truth surface, the audited web UI as a conditional execution
+surface, and this skill as the local orchestration layer. There is no structural
 blocker to requirements, assets, shots, approvals, cost control, generation,
 audio routing, selective repair, finishing, or dashboard operation. The hard
 parts are quality-control judgment and identity/audio consistency, not missing

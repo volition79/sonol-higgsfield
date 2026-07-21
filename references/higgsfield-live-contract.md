@@ -2,11 +2,18 @@
 
 ## Authority order
 
-1. Current authenticated CLI `model get` / `workflow get` output.
-2. Current official Higgsfield skill routing guidance.
-3. This reference, which is a capability map and may drift.
+1. Current authenticated CLI `model get` / `workflow get` output for public
+   contracts, plus the exact provider job returned by `generate get`.
+2. Current visible web controls for a web-executed call.
+3. Current official Higgsfield skill routing guidance.
+4. This reference, which is a capability map and may drift.
 
 Never send a paid request solely from remembered flags or examples here.
+
+The CLI remains the canonical discovery, account, history, and observation
+surface. The web UI is an allowed execution surface when a required control is
+web-only or a confirmed CLI defect rejects a valid call before creating a job.
+Read [web-ui-runtime.md](web-ui-runtime.md) before using that route.
 
 ## Session preflight
 
@@ -33,7 +40,11 @@ Relevant current job types included:
   `speech2text`, `clip_transcriber`.
 - Workflows included `voice_change`, `dubbing`, `draw_to_video`, `reframe`,
   `cinematic_studio_image`, `cinematic_studio_3_0`, and
-  `cinematic_studio_video_3_5`.
+  `cinematic_studio_video_3_5`. In CLI 1.1.19 the Cinema 3.5 contract is
+  absent from `model list` yet inspectable through both `model get` and
+  `workflow get`. Record this as a discovery warning. Generation is
+  executable through `generate create`; `generate workflow` rejects this job
+  type. Persist execution mode `model`.
 
 The observed Cinema Studio Video 3.5 contract exposed structured
 `camera_style`, `light_scheme`, and `color_grading` enums. These are style
