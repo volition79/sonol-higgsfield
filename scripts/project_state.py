@@ -95,7 +95,7 @@ BOUNDARY_STRATEGIES = {
     "editorial_cut",
     "scene_reset",
 }
-KEYFRAME_ROLES = {"start_image", "end_image", "image_reference", "none"}
+KEYFRAME_ROLES = {"start_image", "end_image", "image_reference", "analysis_only", "none"}
 AUDIO_ROUTES = {
     "NO_DIALOGUE_POST",
     "INTENTIONAL_SILENCE",
@@ -774,13 +774,18 @@ def set_boundary(
     shots = read_json(data_dir(root) / "shots.json")
     shot = _find(shots.get("items", []), shot_id, "shot")
     references = deepcopy(shot.get("references") or {})
-    references.setdefault("images", [])
+    # Single-start-image video contract: the paid video call carries exactly
+    # one start image; identity/location/prop references belong to the
+    # start-frame composition step, never to the video generation call.
+    references["images"] = []
     if strategy in {"continuous_match", "motivated_transition"}:
         if not previous_shot_id or not previous_frame:
             raise StateError("continuous boundary requires previous_shot_id and previous_frame")
         references["start"] = previous_frame
         inherit = True
     else:
+        if not planned_keyframe:
+            raise StateError("editorial cut or scene reset requires a composed planned_keyframe start image")
         previous_shot_id = None
         previous_frame = None
         references["start"] = planned_keyframe
@@ -790,14 +795,12 @@ def set_boundary(
             raise StateError("motivated transition requires planned_keyframe")
         references["end"] = planned_keyframe
         role = "end_image"
-    elif strategy == "continuous_match" and planned_keyframe:
-        if planned_keyframe not in references["images"]:
-            references["images"].append(planned_keyframe)
-        role = "image_reference"
-    elif planned_keyframe:
-        role = "start_image"
+    elif strategy == "continuous_match":
+        # A pre-designed keyframe may inform story re-alignment and the prompt,
+        # but it is never transported in the video call.
+        role = "analysis_only" if planned_keyframe else "none"
     else:
-        role = "none"
+        role = "start_image"
     update_shot(
         root,
         shot_id,
@@ -997,6 +1000,8 @@ def boundary_plan_errors(shot: dict[str, Any]) -> list[str]:
     errors: list[str] = []
     if not plan.get("reason"):
         errors.append("boundary director reason is missing")
+    if role == "image_reference":
+        errors.append("planned keyframe must not ride the video call as an image_reference; single-start-image policy")
     references = shot.get("references") or {}
     inherit = plan.get("inherit_previous_last_frame")
     if strategy in {"continuous_match", "motivated_transition"}:
@@ -1016,9 +1021,39 @@ def boundary_plan_errors(shot: dict[str, Any]) -> list[str]:
             errors.append("motivated transition must use the planned keyframe as end_image")
         if not plan.get("planned_keyframe") or references.get("end") != plan.get("planned_keyframe"):
             errors.append("motivated transition is missing its planned end keyframe")
-    if strategy in {"editorial_cut", "scene_reset"} and role == "start_image":
+    if strategy in {"editorial_cut", "scene_reset"}:
         if not plan.get("planned_keyframe") or references.get("start") != plan.get("planned_keyframe"):
-            errors.append("cut/reset planned keyframe must be transported as start_image")
+            errors.append("cut/reset requires its composed planned keyframe as the start_image")
+    return errors
+
+
+def start_image_policy_errors(shot: dict[str, Any]) -> list[str]:
+    """Enforce the single-start-image video contract.
+
+    A paid video call carries exactly one start image, plus the locked dialogue
+    master when the audio route requires it, plus an end image only for a
+    motivated transition. Identity, location, and prop references belong to the
+    start-frame composition step, never to the video generation call.
+    """
+    references = shot.get("references") or {}
+    strategy = (shot.get("boundary") or {}).get("strategy")
+    errors: list[str] = []
+    if not references.get("start"):
+        errors.append("video execution requires exactly one start image")
+    if references.get("images"):
+        errors.append("image references are reserved for start-frame composition, not the video call")
+    if references.get("end") and strategy != "motivated_transition":
+        errors.append("end image is allowed only for a motivated transition")
+    execution = shot.get("generation", {}).get("execution") or {}
+    argv = execution.get("argv") or []
+    if isinstance(argv, list) and argv:
+        _, flags = execution_contract.parse_flags(argv)
+        if flags.get("image_references"):
+            errors.append("execution argv must not carry image_references")
+        if references.get("start") and flags.get("start_image") != references.get("start"):
+            errors.append("execution start_image must match references.start")
+        if flags.get("end_image") and strategy != "motivated_transition":
+            errors.append("execution end_image is allowed only for a motivated transition")
     return errors
 
 
@@ -1070,6 +1105,7 @@ def shot_gate_errors(state: dict[str, dict[str, Any]], shot: dict[str, Any]) -> 
     if missing_context:
         errors.append("continuity context missing: " + ", ".join(missing_context))
     errors.extend(boundary_plan_errors(shot))
+    errors.extend(start_image_policy_errors(shot))
     errors.extend(audio_plan_errors(shot))
     binding = shot.get("shot_grammar", {}).get("provider_binding", {})
     if binding.get("provider") in {"seedance_2_0", "seedance_2_0_mini"}:

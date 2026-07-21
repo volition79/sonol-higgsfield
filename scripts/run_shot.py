@@ -36,18 +36,47 @@ def find_value(value: Any, keys: set[str]) -> Any:
 
 def provider_job_id(value: Any) -> str | None:
     """Accept only explicit job/generation identifiers in known response envelopes."""
+    if isinstance(value, list):
+        value = value[0] if value and isinstance(value[0], dict) else None
     if not isinstance(value, dict):
         return None
-    for key in ("job_id", "generation_id"):
+    for key in ("job_id", "generation_id", "id"):
         if isinstance(value.get(key), str) and value[key]:
             return value[key]
     for envelope in ("data", "result", "generation", "job"):
         child = value.get(envelope)
         if isinstance(child, dict):
-            for key in ("job_id", "generation_id"):
+            for key in ("job_id", "generation_id", "id"):
                 if isinstance(child.get(key), str) and child[key]:
                     return child[key]
     return None
+
+
+def expand_media_args(argv: list[str]) -> list[str]:
+    """Expand JSON-array media flag values into repeated CLI flags.
+
+    The state contract stores list-valued media references as one JSON-array
+    token so fingerprints and grammar bindings stay canonical, but the live
+    Higgsfield CLI accepts one path or UUID per flag occurrence.
+    """
+    expanded: list[str] = []
+    index = 0
+    while index < len(argv):
+        part = argv[index]
+        normalized = execution_contract.normalize_flag(part) if part.startswith("--") else part
+        if normalized in execution_contract.MEDIA_FLAGS and index + 1 < len(argv):
+            try:
+                decoded = json.loads(argv[index + 1])
+            except json.JSONDecodeError:
+                decoded = None
+            if isinstance(decoded, list):
+                for item in decoded:
+                    expanded.extend((part, str(item)))
+                index += 2
+                continue
+        expanded.append(part)
+        index += 1
+    return expanded
 
 
 def cli_json(command: list[str], timeout: int) -> Any:
@@ -148,7 +177,7 @@ def run_paid(
             f"available credits {available} are below the reference arithmetic {reference_credits}"
         )
 
-    command = [executable, "--json", "generate", "create" if mode == "model" else "workflow", *argv]
+    command = [executable, "--json", "generate", "create" if mode == "model" else "workflow", *expand_media_args(argv)]
     if "--wait" not in argv:
         command.append("--wait")
     state.transition_generation(production, shot_id, "QUEUED", "agent", "guarded paid execution")

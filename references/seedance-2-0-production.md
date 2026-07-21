@@ -54,6 +54,19 @@ or a shot count other than one. `seedance_multishot_experimental` requires:
 
 ## Reference manifest
 
+**Single-start-image video contract.** The start image is guidance, not a
+pixel lock: when a video call also carries `image_references`, the model
+blends all of them and can reframe the opening away from the start image
+entirely (verified in production, 2026-07: a tight two-shot start image plus
+two wide composition references opened wide). Therefore a paid Seedance call
+carries exactly one `start_image`; `end_image` only for a declared motivated
+transition; `audio_references` only for a locked dialogue master. Character,
+location, prop, and style references are consumed by the image model that
+composes the start frame, never by the video call. Add one tight face
+reference back only as a recorded retry against observed late-clip identity
+drift. Always instruct the prompt to begin exactly on the provided start image
+framing, and QC the rendered first frame against the submitted start image.
+
 Keep semantic intent separate from the CLI transport:
 
 ```json
@@ -73,14 +86,16 @@ web guide describes semantic `@character`, `@style`, `@motion`, and `@audio`
 references, but the current CLI schema exposes only transport arrays. Keep
 `prompt_alias` null and never invent `@` aliases for a CLI command.
 
-Apply the live limits fail-closed:
+Apply the live limits fail-closed (under the single-start-image contract the
+image budget is consumed by the start-frame composition step, not the video
+call):
 
 - images plus start/end: at most 9;
 - videos: at most 3;
 - audios: at most 3;
 - all references including start/end: at most 12;
 - audio references require at least one image, video, start image, or end
-  image;
+  image — the start image satisfies this;
 - fast mode permits only 480p or 720p.
 
 The official pages contain shorthand that can sound contradictory about
@@ -109,6 +124,7 @@ not let a prototype inherit the provider default.
 Compare the output against the exact shot contract rather than asking whether
 it looks generally cinematic:
 
+- rendered first frame against the submitted start image (framing jump = fail);
 - primary action and final state;
 - camera movement, framing, axis, and prohibited cuts/zoom;
 - identity, wardrobe, product, location, and reference roles;

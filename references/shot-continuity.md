@@ -20,23 +20,48 @@ decision.
 ## Director boundary decision
 
 Choose one strategy before compiling every shot. Store its reason, previous
-shot ID, frame paths, and transport roles in the approved shot board.
+shot ID, frame paths, and transport roles in the approved shot board. Every
+strategy resolves to **exactly one start image** in the video call.
 
-| Strategy | Use when | Previous last frame | Planned keyframe |
+| Strategy | Use when | Start image | Planned keyframe |
 |---|---|---|---|
-| `continuous_match` | Scene, axis, action, and visual flow continue | Required as `start_image` | Optional `image_references`; middle timing is not guaranteed |
-| `motivated_transition` | A camera move or visual bridge changes composition | Required as `start_image` | Required as `end_image`, preferably in a bridge shot |
-| `editorial_cut` | Reverse angle, reaction, insert, hard cut, or decisive shot-size change | Forbidden | Current `start_image` when available |
-| `scene_reset` | Place, time, style, or story unit changes | Forbidden | Current `start_image` when available |
+| `continuous_match` | Scene, axis, action, and visual flow continue | Previous accepted boundary frame, alone | `analysis_only`: informs story re-alignment and the prompt; never transported |
+| `motivated_transition` | A camera move or visual bridge changes composition | Previous accepted boundary frame | Required as `end_image`, preferably in a bridge shot |
+| `editorial_cut` | Reverse angle, reaction, insert, hard cut, or decisive shot-size change | Freshly composed keyframe, required | Same image (it is the start image) |
+| `scene_reset` | Place, time, style, or story unit changes | Freshly composed keyframe, required | Same image (it is the start image) |
 
-Extract the accepted previous clip's final frame, never a rejected candidate's
-frame. Do not propagate a frame before visual QC because identity, hand, prop,
-or background defects would become the next generation's initial condition.
+Extract the accepted previous clip's boundary frame, never a rejected
+candidate's frame. Prefer the sharpest frame within the final half second over
+a motion-blurred exact last frame. Do not propagate a frame before visual QC
+because identity, hand, prop, or background defects would become the next
+generation's initial condition.
 
-The current Seedance CLI has no native `middle_image`. A planned image sent via
-`image_references` is semantic guidance only. When arrival at that composition
-matters, use it as a bridge shot's `end_image`, approve the bridge, and start the
-following shot from that keyframe.
+Compose cut/reset start images just-in-time: run the locked character,
+location, and prop references through the image model with the current story
+state, not from a start-frame batch produced before generation began. Cuts and
+resets also reset the quality drift a long chain accumulates.
+
+The current Seedance CLI has no native `middle_image`, and a planned image sent
+via `image_references` competes with the start image and pulls the opening
+framing away from it. When arrival at a composition matters, use it as a
+bridge shot's `end_image`, approve the bridge, and start the following shot
+from that keyframe.
+
+## Sequential adaptive story loop
+
+The story plan is a map; the footage is the territory. After each accepted
+shot:
+
+1. Extract and QC the boundary frame.
+2. Read the frame like a director: pose, gaze, hands, props, framing, light,
+   emotion.
+3. Re-align the next shot's action, dialogue staging, and prompt to that frame.
+   Anchor beats and recorded audio masters stay fixed; if a re-alignment would
+   contradict a recorded line, re-record that line instead of bending the
+   footage.
+4. Wire the boundary, compile a compact prompt, and generate.
+5. Compare the new clip's actual first frame against the submitted start image
+   before accepting it.
 
 ## Structured shot grammar
 
@@ -56,40 +81,55 @@ and depth effect as well.
 
 ## Reference hierarchy
 
-- Start frame controls entry composition and state.
-- End frame controls handoff composition and state.
-- A previous final frame becomes a start frame only for `continuous_match` or
-  `motivated_transition`.
+The video call and the start-frame composition step have different transports:
+
+**Video call (single-start-image contract):**
+
+- Start frame controls entry composition and state — it is the only image the
+  video call carries.
+- End frame controls handoff composition and state — `motivated_transition`
+  only.
+- A previous boundary frame becomes a start frame only for `continuous_match`
+  or `motivated_transition`.
+- Audio reference carries only the locked dialogue master on a
+  visible-dialogue route.
+- Video reference (motion/camera behavior) requires an explicit recorded
+  rationale; it is not part of the default contract.
+
+**Start-frame composition step (image model):**
+
 - Character asset controls face, hair, body, costume, and stable details.
 - Location asset controls geometry, weather, lighting, and persistent objects.
 - Prop/product asset controls exact shape, label, color, orientation, and wear.
-- Video reference controls motion or camera behavior.
-- Audio reference controls only what the live model contract documents.
+
+Identity control in the video call comes from the start image itself, because
+it was composed from the locked references. If identity drifts late in a clip,
+retry with one tight face reference added back as the single recorded change —
+never as a default, because every extra image competes with the start frame's
+framing.
 
 For Seedance, record each reference in `references.manifest` with its semantic
 role, CLI transport field, source, controlled traits, locked asset ID, and a
 null `prompt_alias`. Read
 [seedance-2-0-production.md](seedance-2-0-production.md) for the exact manifest
-and live count rules.
-
-Do not spend the reference budget on redundant mood images. If identity,
-environment, action, and two boundaries cannot fit unambiguously, simplify or
-split the shot.
+and live count rules; the count budget applies to the composition step.
 
 ## Prompt structure
 
-Write the prompt in this order when the model accepts natural language:
+Keep the prompt compact and high-probability. Write it in this order when the
+model accepts natural language:
 
-1. Who and where, tied to reference IDs.
-2. Entry state and primary action.
-3. Camera/framing/movement.
-4. Lighting, palette, texture, and atmosphere.
-5. Audio behavior only if the contract supports it.
+1. Shot spec: count, duration, aspect, single continuous shot.
+2. Instruction to begin exactly on the provided start image framing.
+3. Who and where, then one primary action.
+4. One camera move with framing/focus.
+5. Lighting, palette, and mood in one clause.
 6. Exit state that sets up the next shot.
-7. Explicit invariants: face, costume, product, logo, direction, axis.
 
-Avoid asking for multiple scene changes in one short generation. Avoid negative
-prompt lists unless the selected schema supports them.
+Include only the two or three invariants that the shot cannot survive
+breaking. Long enumerations of invariants and reference descriptions lower
+compliance. Avoid asking for multiple scene changes in one short generation.
+Avoid negative prompt lists unless the selected schema supports them.
 
 Generate this ordered camera clause with `render_shot_prompt.py` or the
 `compile-grammar` CLI command; do not freehand a second, divergent camera plan.

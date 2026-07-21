@@ -81,6 +81,16 @@ and [shot-continuity.md](references/shot-continuity.md). Use the JSON catalog on
 when selecting or validating a technique; do not load all 148 records into the
 conversation by default.
 
+Treat the story as a sequential adaptive plan, not a fixed shot-by-shot
+blueprint. Lock the anchor beats (the story's non-negotiable turning points) and
+any recorded dialogue or narration masters; keep the connective tissue between
+anchors flexible. Video generation is hard to control, so after each accepted
+shot, analyze its boundary frame and micro-adjust the next shot's action,
+framing, and prompt to what the footage actually gave you — never the other way
+around. Do not pre-produce start frames for the whole board: compose only the
+first shot's start image up front, and compose later start images just-in-time
+at editorial cuts and scene resets using the then-current story state.
+
 Translate plain intent into two or three explainable alternatives:
 
 ```bash
@@ -152,6 +162,13 @@ final references. Use GPT Image for images containing important Korean text,
 then run `ocr_check.py` before user review. Treat OCR as a gate, not proof of
 visual quality.
 
+Character, location, prop, and style references exist to **compose start
+images**, not to ride along in video calls. Feed them to the image model that
+builds each shot's single start frame; the video call then receives only that
+finished start frame. Competing composition references in a video call cause
+the model to reframe away from the start image (observed and documented), so
+the reference budget rules apply to the start-frame composition step.
+
 Move each asset through:
 
 `DRAFT -> INTERNAL_QC_PASSED -> USER_REVIEW -> USER_APPROVED -> LOCKED_FOR_VIDEO`
@@ -163,8 +180,25 @@ an asset that is not `LOCKED_FOR_VIDEO`.
 ### 6. Generate one bounded shot at a time
 
 Prefer Seedance 2.0 for serious general video. Respect the live reference and
-duration limits. Pack only references that materially control the shot; split
-the shot when the reference budget or state transition becomes ambiguous.
+duration limits.
+
+Apply the single-start-image video contract, enforced by the generation gate:
+
+- Every paid video call carries **exactly one start image** — the previous
+  accepted shot's boundary frame on a chain, or a freshly composed keyframe at
+  a cut/reset.
+- No `image_references` in a video call. Identity and location control comes
+  from the start image itself, which was composed from those references.
+- `end_image` only for a declared `motivated_transition`.
+- `audio_references` only for the locked dialogue master on a visible-dialogue
+  route (the start image satisfies the visual-reference requirement).
+- If identity drifts late in a clip, retry with one tight face reference added
+  back as the single recorded change — never as a default.
+
+Keep the prompt compact and high-probability: shot spec, subject and one
+action, one camera move, lighting and mood, an explicit instruction to begin
+exactly on the provided start image framing, and the exit state. Long
+enumerations of invariants and reference descriptions lower compliance.
 
 Submit with `--wait --json` only after the guarded runner has re-fetched the
 selected contract, confirmed remaining project-ceiling capacity, and checked
@@ -216,21 +250,41 @@ unless a concrete provider or deterministic checker produced evidence.
 
 ### 8. Direct boundaries, verify continuity, and repair selectively
 
-Before compiling each shot after the first, classify the incoming edit:
+Run the sequential adaptive loop after every accepted shot:
 
-- `continuous_match`: extract the accepted previous shot's final frame and use
-  it as the next `start_image`. A planned keyframe may be transported only as an
-  `image_references` item; its middle timing is prompt-soft and unguaranteed.
-- `motivated_transition`: use the previous final frame as `start_image` and the
+1. Extract the boundary frame with `media_pipeline.py boundary-frames` — prefer
+   the sharpest frame within the final half second over a motion-blurred exact
+   last frame.
+2. Analyze that frame against the story plan: pose, gaze, props, framing,
+   lighting, emotional state.
+3. Micro-adjust the next shot's action and prompt to match the frame, keeping
+   the anchor beats and recorded audio masters fixed.
+4. Classify the incoming edit and wire exactly one start image.
+
+Boundary strategies:
+
+- `continuous_match`: the accepted previous boundary frame becomes the next
+  `start_image`, alone. A pre-designed keyframe is analysis input for story
+  re-alignment only — it is never transported in the video call.
+- `motivated_transition`: previous boundary frame as `start_image` and the
   planned new keyframe as `end_image`, preferably in a dedicated bridge shot.
+  This is the only strategy that carries a second image.
 - `editorial_cut`: for reverse angles, reactions, inserts, decisive shot-size
-  changes, or hard cuts, do not inherit the previous frame; use the current
-  planned keyframe as `start_image` when available.
-- `scene_reset`: for a new place, time, style, or story unit, do not inherit the
-  previous frame; rebuild from the current keyframe and stable references.
+  changes, or hard cuts, do not inherit the previous frame; compose a new
+  start image now from locked references and the current story state.
+- `scene_reset`: for a new place, time, style, or story unit, do not inherit
+  the previous frame; compose a new start image now. Cuts and resets also
+  break the error accumulation of a long chained sequence — prefer one when
+  quality has visibly drifted.
 
 The current CLI exposes no native `middle_image`. Never claim that a generic
 image reference is temporally pinned to the middle of a clip.
+
+Immediately after generation, compare the clip's actual first frame against the
+submitted start image before accepting the shot. The provider treats the start
+image as strong guidance, not a pixel lock; a visible framing jump at the
+boundary is a QC failure to repair or regenerate, not a surprise to discover in
+the edit.
 
 Extract the accepted previous clip with `media_pipeline.py boundary-frames`,
 then persist the director decision with `sonol_higgsfield.py set-boundary`. For
@@ -270,6 +324,12 @@ shots, QC gaps, and any manual checks still required.
 
 - Never start paid generation before requirements and budget are user-approved.
 - Never approve or queue a shot without a complete provider-compiled and validated `shot_grammar`.
+- Never pack `image_references` into a paid video call; references compose the
+  single start image, and only a `motivated_transition` may add an `end_image`.
+- Never pre-produce start frames beyond the next shot to generate; compose them
+  just-in-time from the current story state.
+- Never accept a shot without comparing its actual first frame to the submitted
+  start image.
 - Never combine multiple primary camera moves unless the user accepts an experimental A/B test.
 - Never insert web `@character`, `@style`, `@motion`, or `@audio` aliases into a CLI prompt unless the live CLI schema explicitly exposes alias binding.
 - Never let Seedance inherit its current `generate_audio=true` default; compile an explicit shot audio route.

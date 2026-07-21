@@ -35,16 +35,21 @@ user's total ceiling.
 
 ### D. Assets
 
-Exit only when required character, location, prop, product, graphic, and key
-frame assets have passed internal review and explicit user review. Korean-text
-assets also require OCR evidence. Final video consumes only versioned
-`LOCKED_FOR_VIDEO` assets.
+Exit only when required character, location, prop, product, and graphic assets
+have passed internal review and explicit user review, plus the **first shot's
+start frame only** — later start frames are composed just-in-time during
+generation (chained shots inherit the previous boundary frame; cuts and resets
+compose a new one from the locked references and current story state).
+Korean-text assets also require OCR evidence. Final video consumes only
+versioned `LOCKED_FOR_VIDEO` assets.
 
 ### E. Shot board
 
-Exit per shot only after boundary strategy, start/end/reference choices, prompt,
-duration, model, audio plan, continuity handoff, and provider-compiled cinematography grammar are
-approved and locked. Board approval is version-specific. Any grammar change
+Exit per shot only after boundary strategy, the single start image (plus end
+image only for a motivated transition), prompt, duration, model, audio plan,
+continuity handoff, and provider-compiled cinematography grammar are approved
+and locked. Board a shot only when its start image exists — for chained shots
+that means after the previous shot is accepted. Board approval is version-specific. Any grammar change
 returns the board to `DRAFT`, increments the generation version, and resets QC.
 Store the approved provider call and its generated fingerprint as
 `generation.execution = {"mode":"model|workflow","argv":[...],"fingerprint":"sha256:..."}`.
@@ -53,7 +58,10 @@ Store the approved provider call and its generated fingerprint as
 
 Generate one dependent shot at a time. Record the exact job ID, arguments,
 model contract snapshot, result path, and actual credits. Inspect before the
-next shot that depends on its end state.
+next shot that depends on its end state: compare the rendered first frame to
+the submitted start image, extract the sharpest boundary frame from the final
+half second, analyze it, and re-align the next shot's plan to it before
+compiling.
 
 ### G. QC and finish
 

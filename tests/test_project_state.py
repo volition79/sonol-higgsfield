@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import stat
 import sys
 import tempfile
@@ -85,6 +86,7 @@ class ProductionStateTests(unittest.TestCase):
             invariants=["same face and wardrobe"],
             live_schema=self.live_schema,
             seedance_plan={"aspect_ratio": "16:9", "resolution": "720p"},
+            references={"start": "media/images/SHOT_001_start.png"},
         )
         argv = ["seedance_2_0", "--prompt", compiled["prompt"]]
         for key, value in compiled["native_params"].items():
@@ -97,10 +99,12 @@ class ProductionStateTests(unittest.TestCase):
                 "boundary": {
                     "strategy": "scene_reset",
                     "inherit_previous_last_frame": False,
-                    "planned_keyframe_role": "none",
+                    "planned_keyframe": "media/images/SHOT_001_start.png",
+                    "planned_keyframe_role": "start_image",
                     "cut_type": "opening",
                     "reason": "first shot establishes a new scene",
                 },
+                "references": {"start": "media/images/SHOT_001_start.png"},
                 "required_asset_ids": ["CHAR_001"],
                 "audio": {"route": "NO_DIALOGUE_POST", "has_visible_dialogue": False},
                 "model": "seedance_2_0",
@@ -215,7 +219,8 @@ class ProductionStateTests(unittest.TestCase):
         shot = state.read_json(state.data_dir(self.production) / "shots.json")["items"][0]
         self.assertEqual(state.boundary_plan_errors(shot), [])
         self.assertEqual(shot["references"]["start"], "media/images/SHOT_000_end.png")
-        self.assertIn("media/images/SHOT_001_keyframe.png", shot["references"]["images"])
+        self.assertNotIn("media/images/SHOT_001_keyframe.png", shot["references"].get("images", []))
+        self.assertEqual(shot["boundary"]["planned_keyframe_role"], "analysis_only")
 
     def test_visible_dialogue_requires_locked_eleven_v3_master(self) -> None:
         self.add_locked_asset()
@@ -233,7 +238,7 @@ class ProductionStateTests(unittest.TestCase):
                     "discard_generated_track": True,
                     "final_mix_required": True,
                 },
-                "references": {"audios": ["media/audio/dialogue.wav"], "images": ["hero.png"]},
+                "references": {"audios": ["media/audio/dialogue.wav"], "start": "hero.png"},
                 "seedance_plan": {"audio_mode": "audio_reference"},
             },
             "agent",
@@ -247,9 +252,9 @@ class ProductionStateTests(unittest.TestCase):
         self.add_locked_shot()
         self.approve_current_shot_cost()
         state.transition_generation(self.production, "SHOT_001", "READY", "agent")
-        fake = Path(self.temp.name) / "fake-higgsfield"
+        script = Path(self.temp.name) / "fake_higgsfield.py"
         contract = self.live_schema["model_contracts"]["seedance_2_0"]
-        fake.write_text(
+        script.write_text(
             "#!/usr/bin/env python3\nimport json,sys\n"
             f"contract={json.dumps(contract)!r}\n"
             "assert 'cost' not in sys.argv, 'live cost endpoint must not be called'\n"
@@ -258,7 +263,12 @@ class ProductionStateTests(unittest.TestCase):
             "else: print(json.dumps({'job_id':'job-001','credits':2.5}))\n",
             encoding="utf-8",
         )
-        fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
+        if os.name == "nt":
+            fake = Path(self.temp.name) / "fake-higgsfield.cmd"
+            fake.write_text(f'@echo off\r\n"{sys.executable}" "{script}" %*\r\n', encoding="utf-8")
+        else:
+            fake = script
+            fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
         result = run_shot.run_paid(self.production, "SHOT_001", str(fake), False, 30)
         self.assertEqual(result["job_id"], "job-001")
         self.assertTrue(result["actual_credits_recorded"])
@@ -276,10 +286,15 @@ class ProductionStateTests(unittest.TestCase):
         with self.assertRaisesRegex(state.StateError, "ceiling is exhausted"):
             run_shot.run_paid(self.production, "SHOT_001", "/provider/must/not/run", False, 30)
 
-    def test_provider_job_id_never_accepts_unrelated_id(self) -> None:
-        self.assertIsNone(run_shot.provider_job_id({"id": "asset-001"}))
-        self.assertIsNone(run_shot.provider_job_id({"data": {"id": "asset-001"}}))
+    def test_provider_job_id_accepts_only_known_envelopes(self) -> None:
+        # The live hf CLI returns job objects (or a list of them) whose
+        # identifier key is a plain "id"; non-dict payloads are rejected.
+        self.assertEqual(run_shot.provider_job_id({"id": "job-001"}), "job-001")
+        self.assertEqual(run_shot.provider_job_id([{"id": "job-001"}]), "job-001")
         self.assertEqual(run_shot.provider_job_id({"data": {"job_id": "job-001"}}), "job-001")
+        self.assertIsNone(run_shot.provider_job_id("job-001"))
+        self.assertIsNone(run_shot.provider_job_id(["job-001"]))
+        self.assertIsNone(run_shot.provider_job_id({"credits": 5}))
 
     def test_requirement_change_unlocks_requirements_but_preserves_ceiling(self) -> None:
         self.lock_and_budget()
