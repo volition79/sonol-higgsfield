@@ -13,7 +13,7 @@ orchestration supplied by this skill.
 | Provider job wait/get/list | Native CLI | Execution guidance | Unknown until schema visible | Resume protocol and deterministic job IDs |
 | Native generated audio | Model-dependent | Routing guidance | Model-dependent | Shot-level audio classification |
 | Voice change | Live workflow exists | Route when requested | Unknown until schema visible | Not used as cleanup or stem separation |
-| TTS/audio/music | Native current audio models | Model routing | Unknown until schema visible | ElevenLabs V3 dialogue master, narration plan, external final mix |
+| TTS/audio/music | Native current audio models | Model routing | Unknown until schema visible | V3 dialogue conditioning reference, Seedance native production audio, separate narration/post-only routes |
 | Speech transcript | Current data models | Optional QC route | Unknown until schema visible | Evidence ledger; not treated as pronunciation proof |
 | Requirements interview | Not a backend function | Partial conversational guidance | No evidence | Four-state interview, explicit user lock |
 | Script/timecode/shot decomposition | Not a provider contract | Partial workflow guidance | No evidence | Required durable scene/shot state |
@@ -27,7 +27,7 @@ orchestration supplied by this skill.
 | Korean pronunciation | TTS/transcript tools help | Audio routing advice | No automatic score confirmed | Pronunciation sheet, audition, transcript and manual listen |
 | Objective lip-sync scoring | No observed scoring contract | Manual review required | No evidence | `MANUAL_REQUIRED`/pass/fail gate; no invented score |
 | Dialogue stem separation | No observed dedicated contract | No proven automation | No evidence | Explicit unsupported boundary; integrate another tool if authorized |
-| FFmpeg finishing | Not provider-side generation | May recommend local FFmpeg | No | Probe, frames, strip audio, external-stem final mix, trim, concat, stretch, mux |
+| FFmpeg finishing | Not provider-side generation | May recommend local FFmpeg | No | Probe, frames, native-audio preservation, post-only external mix, trim, concat, stretch, mux |
 | Selective regeneration | CLI can resubmit jobs | Workflow recommendation | Tool-dependent | Version/reset/retry state and repair ladder |
 | Local production dashboard | No | No | No | Bootstrap/Vanilla industrial dashboard, split JSON, history |
 
@@ -51,8 +51,9 @@ orchestration supplied by this skill.
 - Redacted live CLI/model/workflow/account/MCP preflight.
 - Korean/English OCR text-presence checker.
 - FFmpeg/ffprobe finishing helpers.
-- Schema v5 story-anchor, adaptive-analysis, first-frame-QC, JIT provenance,
-  and recorded-audio SHA-256 gates.
+- Schema v6 story-anchor, adaptive-analysis, first-frame-QC, JIT provenance,
+  compact native sound brief, generated-track policy, and recorded-reference
+  SHA-256 gates.
 - Responsive local dashboard with random token and stale-version protection.
 - Dashboard grammar readiness, rationale, provider, and support-level views.
 - Unit, CLI, HTTP, policy, state persistence, and helper tests.

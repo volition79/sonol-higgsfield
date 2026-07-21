@@ -121,7 +121,7 @@ later clips either inherit the accepted boundary frame or compose a fresh frame
 just in time at a director-selected cut. The compiler rejects competing image
 references, caps the compact prompt at three critical invariants, and FFmpeg
 selects the lowest-blur candidate from eight samples in the final 0.5 seconds.
-Schema v5 then requires first-frame QC, a recorded boundary analysis, locked
+Schema v6 then requires first-frame QC, a recorded boundary analysis, locked
 story anchors, and the previous user acceptance before the next clip can run.
 
 ### Resume long productions safely
@@ -140,9 +140,12 @@ than restarting the entire film.
 ### Treat Korean text and audio as production concerns
 
 Korean text assets can pass through OCR evidence and human visual review.
-Visible dialogue starts from a locked ElevenLabs V3 master used as the Seedance
-audio reference; the rendered track is removed and the untouched master returns
-in the final mix. Narration, ambience, Foley, effects, and music remain separate.
+Visible dialogue starts from a clean locked ElevenLabs V3 conditioning reference.
+Before generation, the agent records the intended voice, ambience, synchronized
+effects, music state, and excluded sounds in one compact Seedance brief. Seedance
+then generates picture and complete production sound together; a QC-passed native
+track is preserved without creative post-production overdubs. Off-screen
+narration and no-dialogue post-only shots keep their separate finishing routes.
 
 ## Production flow
 

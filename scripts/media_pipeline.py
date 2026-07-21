@@ -271,6 +271,23 @@ def final_mix_command(
     return command
 
 
+def preserve_audio_command(ffmpeg: str, video: Path, output: Path) -> list[str]:
+    """Copy the generated picture and native production audio without adding stems."""
+    return [
+        ffmpeg,
+        "-y",
+        "-i",
+        str(video),
+        "-map",
+        "0:v:0",
+        "-map",
+        "0:a:0",
+        "-c",
+        "copy",
+        str(output),
+    ]
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dry-run", action="store_true")
@@ -310,6 +327,10 @@ def main() -> int:
     cmd.add_argument("output", type=Path)
 
     cmd = sub.add_parser("strip-audio")
+    cmd.add_argument("input", type=Path)
+    cmd.add_argument("output", type=Path)
+
+    cmd = sub.add_parser("preserve-audio")
     cmd.add_argument("input", type=Path)
     cmd.add_argument("output", type=Path)
 
@@ -398,6 +419,9 @@ def main() -> int:
                 [ffmpeg, "-y", "-i", str(source), "-map", "0:v:0", "-c:v", "copy", "-an", str(target)],
                 args.dry_run,
             )
+        elif args.command == "preserve-audio":
+            source, target = checked_input(args.input), output_path(args.output)
+            result = run(preserve_audio_command(ffmpeg, source, target), args.dry_run)
         else:
             video, target = checked_input(args.video), output_path(args.output)
             dialogue = checked_input(args.dialogue) if args.dialogue else None

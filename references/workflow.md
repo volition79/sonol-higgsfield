@@ -63,14 +63,16 @@ model contract snapshot, result path, and actual credits. Inspect before the
 next shot that depends on its end state: compare the rendered first frame to
 the submitted start image, score eight boundary candidates from the final half
 second, record the selected frame and semantic observations, and bind the next
-shot to that analysis before compiling. Schema v5 blocks out-of-order dependent
+shot to that analysis before compiling. Schema v6 blocks out-of-order dependent
 generation and stale or pre-produced cut/reset start images.
 
 ### G. QC and finish
 
 Exit only after technical, transcript, lip-sync/manual, visual, cinematography,
-continuity, and user review checks are passed or explicitly not applicable. Apply audio and
-grade in a deterministic final timeline, then probe the exported file.
+continuity, and user review checks are passed or explicitly not applicable. For
+visible dialogue, preserve the accepted native production track and do not add
+creative stems by default. Apply external audio only to its authorized
+post-only route or an approved repair exception, then grade and probe the export.
 
 ## Resume protocol
 
@@ -99,9 +101,11 @@ new paid job and ask again if it could exceed the remaining ceiling.
 
 ### Media fails internal QC
 
-Record which check failed and preserve the rejected version. Prefer edit-point,
-audio, or local finishing repairs first. Regenerate only the affected shot or
-bridge and increment its version.
+Record which check failed and preserve the rejected version. For visible
+dialogue audio failures, simplify the sound brief and regenerate the affected
+shot before proposing an exceptional external replacement. For post-only
+routes, prefer authorized local finishing repairs. Regenerate only the affected
+shot or bridge and increment its version.
 
 ### Credits are exhausted or reference arithmetic exceeds capacity
 

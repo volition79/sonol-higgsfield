@@ -210,7 +210,7 @@ def empty_grammar() -> dict[str, Any]:
 
 
 def default_seedance_plan() -> dict[str, Any]:
-    """Safe official-guide baseline: one short 720p shot with native audio off."""
+    """Safe baseline: one short 720p shot with an explicit audio route."""
     return {
         "mode": "controlled_single_shot",
         "shot_count": 1,
@@ -222,8 +222,56 @@ def default_seedance_plan() -> dict[str, Any]:
         "prototype": True,
         "timed_beats": [],
         "camera_invariants": [],
+        "sound_design": {
+            "dialogue": None,
+            "ambience": None,
+            "synchronized_effects": [],
+            "music": None,
+            "exclusions": [],
+        },
         "experimental_approved": False,
     }
+
+
+def validate_sound_design(value: Any, *, require_complete: bool = False) -> list[str]:
+    """Validate the compact sound brief compiled into a Seedance prompt."""
+    if not isinstance(value, dict):
+        return ["seedance_plan.sound_design must be an object"]
+    allowed = {"dialogue", "ambience", "synchronized_effects", "music", "exclusions"}
+    errors: list[str] = []
+    unknown = sorted(set(value) - allowed)
+    if unknown:
+        errors.append("unknown sound_design fields: " + ", ".join(unknown))
+    for key in ("dialogue", "ambience", "music"):
+        item = value.get(key)
+        if item is not None and (not isinstance(item, str) or not item.strip()):
+            errors.append(f"sound_design.{key} must be a non-empty string or null")
+        if require_complete and (not isinstance(item, str) or not item.strip()):
+            errors.append(f"visible dialogue requires sound_design.{key}")
+    for key, maximum in (("synchronized_effects", 3), ("exclusions", 4)):
+        items = value.get(key)
+        if not isinstance(items, list) or any(not isinstance(item, str) or not item.strip() for item in items):
+            errors.append(f"sound_design.{key} must be an array of non-empty strings")
+        elif len(items) > maximum:
+            errors.append(f"sound_design.{key} supports at most {maximum} compact entries")
+    return errors
+
+
+def seedance_audio_prompt(plan: dict[str, Any]) -> str:
+    """Render one compact audio clause without pretending references are pass-through."""
+    mode = plan["audio_mode"]
+    if mode != "audio_reference":
+        return f"Audio: {mode}"
+    sound = plan["sound_design"]
+    effects = "; ".join(sound["synchronized_effects"]) or "none"
+    exclusions = "; ".join(sound["exclusions"]) or "none"
+    return (
+        "Audio: use the supplied ElevenLabs V3 dialogue reference as guidance for voice, "
+        f"performance, pronunciation, timing, and lip movement; dialogue: {sound['dialogue']}; "
+        f"ambience: {sound['ambience']}; synchronized effects: {effects}; music: {sound['music']}; "
+        f"exclude: {exclusions}; generate the complete production sound with the picture and keep "
+        "the native rendered track"
+    )
 
 
 def merge_grammar(current: dict[str, Any] | None, patch: dict[str, Any]) -> dict[str, Any]:
@@ -660,6 +708,11 @@ def _seedance_native_params(
     audio_mode = merged.get("audio_mode")
     if audio_mode not in {"none", "native_sfx", "native_dialogue", "audio_reference", "post_only"}:
         raise CinematographyError(f"invalid Seedance audio mode: {audio_mode}")
+    sound_errors = validate_sound_design(
+        merged.get("sound_design"), require_complete=audio_mode == "audio_reference"
+    )
+    if sound_errors:
+        raise CinematographyError("invalid Seedance sound design:\n- " + "\n- ".join(sound_errors))
     transport = _reference_transport(references)
     duration_value = float(grammar["duration_seconds"])
     if not duration_value.is_integer():
@@ -704,6 +757,8 @@ def _seedance_native_params(
         errors.append("Seedance audio references require at least one visual reference")
     if audio_count and audio_mode != "audio_reference":
         errors.append("Seedance audio references require audio_mode=audio_reference")
+    if audio_mode == "audio_reference" and not audio_count:
+        errors.append("Seedance audio_mode=audio_reference requires at least one audio reference")
     if merged["generation_mode"] == "fast" and str(merged["resolution"]).lower() in {"1080p", "4k"}:
         errors.append("Seedance fast mode supports at most 720p")
     return params, merged, errors
@@ -806,7 +861,7 @@ def compile_prompt(
             unique_invariants = unique_invariants[:3]
         prompt_parts.append("Critical invariants: " + "; ".join(unique_invariants))
     if plan:
-        prompt_parts.append(f"Audio: {plan['audio_mode']}")
+        prompt_parts.append(seedance_audio_prompt(plan))
     prompt = ". ".join(part for part in prompt_parts if part and part != " in")
     schema_verified_at = None
     schema_contract_hash = None
